@@ -1,0 +1,23 @@
+{
+  "profileId": "real-historical-soc-events",
+  "name": "Public SOC & IDS Telemetry Dataset (Curated Historical)",
+  "description": "Historical incident telemetry mapped from open security honeypots and threat intelligence logs",
+  "isRealCybersecurityData": true,
+  "mapping": {
+    "idColumn": "event_id",
+    "timestampColumn": "timestamp_utc",
+    "sourceIpColumn": "src_ip",
+    "destinationIpColumn": "dest_ip",
+    "attackCategoryColumn": "threat_category",
+    "severityColumn": "threat_level",
+    "descriptionColumn": "alert_summary",
+    "assetIdColumn": "target_asset_id",
+    "assetNameColumn": "target_hostname",
+    "assetCriticalityColumn": "asset_tier",
+    "relatedCveColumn": "cve_reference",
+    "detectionRuleColumn": "signature_id",
+    "statusColumn": "incident_state",
+    "defaultSeverity": "MEDIUM",
+    "defaultAttackCategory": "Exploit Public-Facing App"
+  }
+}

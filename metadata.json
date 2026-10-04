@@ -1,0 +1,6 @@
+{
+  "name": "CRISP - Cyber Risk Intelligence & Scoring Platform",
+  "description": "Continuous cybersecurity risk assessment platform with real-time NVD vulnerability intelligence, CISA KEV catalog integration, historical security incident ingestion, and transparent NIST CSF compliance scoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
