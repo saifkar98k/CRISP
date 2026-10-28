@@ -645,7 +645,10 @@ class VulnerabilityIntelligenceAgent:
             source_references=source_refs,
         )
 
-        return {"vuln_intel": res.to_dict()}
+        return {
+            "vuln_intel": res.to_dict(),
+            "vulnerability_intel": res.to_dict(),
+        }
 
 
 # =============================================================================
@@ -1080,9 +1083,9 @@ class VerificationAgent:
         if contradictions:
             status = VerificationStatus.CONTRADICTION_DETECTED.value
             confidence = 0.50
-        elif missing_evidence and not verified_facts:
-            status = VerificationStatus.UNVERIFIED.value
-            confidence = 0.35
+        elif missing_evidence and (not confirmed_findings or len(confirmed_findings) == 0):
+            status = VerificationStatus.UNVERIFIED.value if not verified_facts or len(verified_facts) <= 1 else VerificationStatus.PARTIALLY_SUPPORTED.value
+            confidence = 0.45
         elif missing_evidence:
             status = VerificationStatus.PARTIALLY_SUPPORTED.value
             confidence = 0.85

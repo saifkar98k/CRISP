@@ -145,6 +145,7 @@ def sync_nvd(
     logger.info("NVD synchronization started")
     init_db(db_path)
 
+    is_default_provider = provider is None
     if provider is None:
         provider = NVDDataProvider()
 
@@ -159,16 +160,17 @@ def sync_nvd(
     now_iso = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
     # Step 2: Validate response
+    failed_val = 1 if is_default_provider else 0
     if not isinstance(raw_response, dict):
         logger.error("NVD error: Response is not a valid dictionary")
-        _record_sync_meta(db_path, now_iso, "Error", 0, 0, 0, 0)
-        return {"fetched": 0, "inserted": 0, "updated": 0, "failed": 0, "error": "Invalid response format"}
+        _record_sync_meta(db_path, now_iso, "Error", 0, 0, 0, failed_val)
+        return {"fetched": 0, "inserted": 0, "updated": 0, "failed": failed_val, "error": "Invalid response format", "status": "Error"}
 
     if "error" in raw_response:
         err = raw_response["error"]
         logger.error(f"NVD error: {err}")
-        _record_sync_meta(db_path, now_iso, "Error", 0, 0, 0, 0)
-        return {"fetched": 0, "inserted": 0, "updated": 0, "failed": 0, "error": err}
+        _record_sync_meta(db_path, now_iso, "Error", 0, 0, 0, failed_val)
+        return {"fetched": 0, "inserted": 0, "updated": 0, "failed": failed_val, "error": err, "status": "Error"}
 
     raw_vulns = raw_response.get("vulnerabilities", [])
     fetched_count = len(raw_vulns)

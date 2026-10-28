@@ -18,6 +18,8 @@ import sqlite3
 import logging
 from typing import Dict, Any, List
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 logger = logging.getLogger("CRISP.Benchmark")
 
@@ -75,7 +77,7 @@ def benchmark_database_queries(limit: int = 100) -> Dict[str, Any]:
 
         # Query 1: Vulnerabilities
         t0 = time.perf_counter()
-        c.execute("SELECT cve_id, cvss_score, severity, is_known_exploited FROM vulnerabilities LIMIT ?", (limit,))
+        c.execute("SELECT cve_id, cvss_score, severity, known_exploited FROM vulnerabilities LIMIT ?", (limit,))
         _ = c.fetchall()
         t_vulns = (time.perf_counter() - t0) * 1000
 
@@ -87,7 +89,7 @@ def benchmark_database_queries(limit: int = 100) -> Dict[str, Any]:
 
         # Query 3: Security Events with index
         t2 = time.perf_counter()
-        c.execute("SELECT id, timestamp, attack_category, severity FROM security_events LIMIT ?", (limit,))
+        c.execute("SELECT event_id, timestamp, attack_category, severity FROM security_events LIMIT ?", (limit,))
         _ = c.fetchall()
         t_events = (time.perf_counter() - t2) * 1000
 

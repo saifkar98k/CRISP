@@ -11,8 +11,10 @@ import {
   AlertTriangle,
   Flame,
   Radio,
+  Sparkles,
 } from 'lucide-react';
 import { AuthModal } from './AuthModal';
+import { VivaDemoModal } from './VivaDemoModal';
 
 export const Navbar: React.FC = () => {
   const {
@@ -26,6 +28,7 @@ export const Navbar: React.FC = () => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isVivaDemoOpen, setIsVivaDemoOpen] = useState(false);
 
   const [currentUser, setCurrentUser] = useState(() => {
     try {
@@ -99,6 +102,17 @@ export const Navbar: React.FC = () => {
                 {lastDataUpdate.includes('T') ? lastDataUpdate.split('T')[1]?.substring(0, 8) || lastDataUpdate : lastDataUpdate}
               </span>
             </div>
+
+            {/* Viva 8-12 Min Demo Workflow Button */}
+            <button
+              onClick={() => setIsVivaDemoOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gradient-to-r from-cyan-950 to-indigo-950 hover:from-cyan-900 hover:to-indigo-900 text-cyan-300 border border-cyan-800/80 text-xs font-semibold shadow-sm transition-all"
+              title="Launch 8-12 minute academic viva demonstration script"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              <span className="hidden sm:inline">Viva Demo</span>
+              <span className="sm:hidden">Demo</span>
+            </button>
 
             {/* Notification / Alert Indicator */}
             <div className="relative">
@@ -276,6 +290,11 @@ export const Navbar: React.FC = () => {
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
         onUserChanged={handleUserChanged}
+      />
+
+      <VivaDemoModal
+        isOpen={isVivaDemoOpen}
+        onClose={() => setIsVivaDemoOpen(false)}
       />
     </header>
   );

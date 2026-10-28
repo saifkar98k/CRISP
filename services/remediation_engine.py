@@ -790,10 +790,12 @@ class RemediationEngine:
     def submit_verification(
         self,
         remediation_id: str,
-        verification_evidence: Dict[str, Any],
+        verification_evidence: Optional[Dict[str, Any]] = None,
         user_role: str = ROLE_SOC_ANALYST,
         user_id: str = "saifkar98k@gmail.com",
         notes: str = "",
+        evidence: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Submits post-remediation verification evidence (e.g. clean vulnerability scan, package version check).
@@ -810,9 +812,25 @@ class RemediationEngine:
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # Validate evidence payload
-        is_verified = bool(verification_evidence.get("is_clean", True))
-        evidence_summary = str(verification_evidence.get("evidence_summary", "")).strip()
-        scanner_tool = verification_evidence.get("scanner_or_tool", "Automated Scan / Audit Tool")
+        evidence_payload = verification_evidence if verification_evidence is not None else (evidence if evidence is not None else kwargs.get("evidence", {}))
+        if not isinstance(evidence_payload, dict):
+            evidence_payload = {}
+        verification_evidence = evidence_payload
+
+        is_clean_flag = verification_evidence.get("is_clean")
+        vuln_detected = verification_evidence.get("vulnerability_detected")
+        is_verified = bool(verification_evidence.get("status") == "CLEAN" or is_clean_flag is True or (vuln_detected is False))
+        if vuln_detected is True:
+            is_verified = False
+
+        evidence_summary = str(
+            verification_evidence.get("evidence_summary")
+            or verification_evidence.get("sbom_package_version")
+            or verification_evidence.get("scan_id")
+            or verification_evidence.get("status")
+            or ""
+        ).strip()
+        scanner_tool = verification_evidence.get("scanner_or_tool") or verification_evidence.get("scanner", "Automated Scan / Audit Tool")
 
         if not evidence_summary:
             raise ValueError("Verification evidence must provide a substantive evidence_summary (scan results or verified package version).")

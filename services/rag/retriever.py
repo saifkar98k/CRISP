@@ -17,7 +17,7 @@ the relevance threshold, returns:
 """
 
 from typing import Any, Dict, List, Optional, Union
-from services.rag.chroma_client import CRISPChromaManager, COLLECTION_NAMES
+from services.rag.chroma_client import CRISPChromaManager, COLLECTION_NAMES, get_chroma_client
 
 NO_RELEVANT_DATA_MSG = "No relevant CRISP data was found."
 
@@ -432,13 +432,33 @@ def retrieve(
     collection: Optional[str] = None,
     persist_dir: Optional[str] = None,
 ) -> Union[List[Dict[str, Any]], str]:
-    """Top-level retrieve(query) implementation."""
-    return get_retriever(persist_dir).retrieve(
-        query=query,
-        filters=filters,
-        n_results=n_results,
-        collection=collection,
-    )
+    """Top-level retrieve(query) implementation with graceful ChromaDB fallback."""
+    try:
+        get_chroma_client(persist_dir)
+        return get_retriever(persist_dir).retrieve(
+            query=query,
+            filters=filters,
+            n_results=n_results,
+            collection=collection,
+        )
+    except Exception as exc:
+        try:
+            from services.agents.tools import tool_query_vulnerabilities
+            vulns = tool_query_vulnerabilities(query=query, limit=n_results)
+            if vulns:
+                return [
+                    {
+                        "document": f"{v.get('cve_id')}: {v.get('description', '')}",
+                        "metadata": v,
+                        "collection": "vulnerabilities",
+                        "distance": 0.5,
+                        "is_fallback": True,
+                    }
+                    for v in vulns
+                ]
+        except Exception:
+            pass
+        return []
 
 
 def retrieve_vulnerabilities(

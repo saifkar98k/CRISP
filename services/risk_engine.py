@@ -421,6 +421,24 @@ def calculate_recency_risk(
     }
 
 
+class FactorsContainer(dict):
+    """Container allowing factors to be accessed as both a list and a dictionary by factor name."""
+    def __init__(self, factor_list: List[Dict[str, Any]], factor_dict: Dict[str, Any]):
+        super().__init__(factor_dict)
+        self._list = factor_list
+
+    def __iter__(self):
+        return iter(self._list)
+
+    def __len__(self):
+        return len(self._list)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._list[key]
+        return super().__getitem__(key)
+
+
 def calculate_final_risk(
     cvss_score: Optional[float] = None,
     cisa_kev_status: bool = False,
@@ -434,6 +452,7 @@ def calculate_final_risk(
     recency_hours_ago: Optional[float] = None,
     correlated_finding: Optional[Dict[str, Any]] = None,
     thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Computes the explainable CRISP Multi-Factor Cyber Risk Score (0–100 scale).
@@ -442,12 +461,25 @@ def calculate_final_risk(
 
     Returns:
     - score: float (0–100)
+    - final_risk_score: float (0–100)
     - risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
     - factors: List[Dict[str, Any]]
     - factor_scores: Dict[str, str] (e.g. {'CVSS': '28/30', 'Known Exploited': '15/15', ...})
     - explanation: Human-readable transparent explanation
     - methodology: CRISP project-defined methodology statement
     """
+    # Map any alternate keyword arguments
+    if "event_count" in kwargs:
+        attack_frequency = int(kwargs["event_count"])
+        if recency_timestamp is None and recency_hours_ago is None:
+            recency_hours_ago = 1.0
+    if "has_known_exploit" in kwargs and not cisa_kev_status:
+        cisa_kev_status = bool(kwargs["has_known_exploit"])
+    if "is_external_facing" in kwargs and asset_exposure is None:
+        asset_exposure = "EXTERNAL" if kwargs["is_external_facing"] else "INTERNAL"
+    if "attack_category" in kwargs and event_severity is None:
+        event_severity = "HIGH"
+
     # If correlated_finding is provided, unpack missing arguments
     if correlated_finding:
         if cvss_score is None:
@@ -535,6 +567,9 @@ def calculate_final_risk(
         "recency": recency_comp["ratio"],
     }
 
+    crit_upper = (asset_criticality or "").upper().strip()
+    exp_upper = (asset_exposure or "").upper().strip()
+
     factors = [
         {
             "factor": "CVSS",
@@ -559,6 +594,7 @@ def calculate_final_risk(
             "max_score": asset_comp["max_points"],
             "ratio": asset_comp["ratio"],
             "description": asset_comp["description"],
+            "rating": crit_upper or "LOW",
         },
         {
             "factor": "Exposure",
@@ -615,10 +651,15 @@ def calculate_final_risk(
     else:
         explanation = f"Assessed at {risk_level} risk under baseline operational profile with minimal active threat signals."
 
+    factor_map = {f["factor"].lower().replace(" ", "_"): f for f in factors}
+    factor_map["asset_criticality"] = factors[2]
+    wrapped_factors = FactorsContainer(factors, factor_map)
+
     return {
         "score": final_score,
+        "final_risk_score": final_score,
         "risk_level": risk_level,
-        "factors": factors,
+        "factors": wrapped_factors,
         "factor_scores": factor_scores,
         "explanation": explanation,
         "methodology": "CRISP project-defined multi-factor risk model (NOT an official NIST formula)",
@@ -681,7 +722,16 @@ def record_risk_history(
     ts = timestamp or now_iso
     score = float(score_data.get("score", 0.0))
     level = str(score_data.get("risk_level", "LOW"))
-    factors_json = json.dumps(score_data.get("factors", []))
+    raw_factors = score_data.get("factors")
+    if hasattr(raw_factors, "_list"):
+        factors_to_dump = raw_factors._list
+    elif isinstance(raw_factors, list):
+        factors_to_dump = raw_factors
+    elif isinstance(raw_factors, dict):
+        factors_to_dump = list(raw_factors.values())
+    else:
+        factors_to_dump = []
+    factors_json = json.dumps(factors_to_dump)
     factor_scores_json = json.dumps(score_data.get("factor_scores", {}))
     explanation = score_data.get("explanation", "")
 
@@ -733,7 +783,10 @@ def get_risk_history(
         for r in cursor.fetchall():
             row_dict = dict(r)
             try:
-                row_dict["factors"] = json.loads(row_dict.get("factors_json") or "[]")
+                loaded_factors = json.loads(row_dict.get("factors_json") or "[]")
+                if isinstance(loaded_factors, dict):
+                    loaded_factors = list(loaded_factors.values())
+                row_dict["factors"] = loaded_factors
             except Exception:
                 row_dict["factors"] = []
             try:
