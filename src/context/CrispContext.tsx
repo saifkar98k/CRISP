@@ -41,6 +41,10 @@ export interface NvdSyncStatusInfo {
 interface CrispContextType {
   // State
   isInitialized: boolean;
+  initStage: string;
+  initPercent: number;
+  initError: string | null;
+  retryInit: () => void;
   isSyncing: boolean;
   lastDataUpdate: string;
   vulnerabilities: Vulnerability[];
@@ -71,6 +75,8 @@ interface CrispContextType {
   // Filtering & View state
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  subTab: string;
+  setSubTab: (tab: string) => void;
   provenanceFilter: ProvenanceFilter;
   setProvenanceFilter: (filter: ProvenanceFilter) => void;
   searchQuery: string;
@@ -83,6 +89,9 @@ const CrispContext = createContext<CrispContextType | null>(null);
 
 export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isInitialized, setIsInitialized] = useState(false);
+  const [initStage, setInitStage] = useState('Initializing platform...');
+  const [initPercent, setInitPercent] = useState(10);
+  const [initError, setInitError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastDataUpdate, setLastDataUpdate] = useState<string>('Initializing...');
   const [vulnerabilities, setVulnerabilities] = useState<Vulnerability[]>([]);
@@ -100,11 +109,76 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [demoStreamSpeed, setDemoStreamSpeed] = useState(3500); // 3.5s interval
   const demoIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // View state
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // View state: Exactly 5 primary options: overview, live, intelligence, swarm, admin
+  const [activeTab, setActiveTabRaw] = useState('overview');
+  const [subTab, setSubTab] = useState('vulnerabilities');
   const [provenanceFilter, setProvenanceFilter] = useState<ProvenanceFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+
+  // Smart normalizer for tab navigation (mapping legacy tab IDs to the 5 primary tabs)
+  const setActiveTab = useCallback((tab: string) => {
+    switch (tab) {
+      case 'dashboard':
+      case 'overview':
+        setActiveTabRaw('overview');
+        break;
+      case 'live':
+      case 'events':
+        setActiveTabRaw('live');
+        break;
+      case 'intelligence':
+        setActiveTabRaw('intelligence');
+        break;
+      case 'vulnerabilities':
+        setActiveTabRaw('intelligence');
+        setSubTab('vulnerabilities');
+        break;
+      case 'cisa_kev':
+        setActiveTabRaw('intelligence');
+        setSubTab('cisa_kev');
+        break;
+      case 'findings':
+        setActiveTabRaw('intelligence');
+        setSubTab('findings');
+        break;
+      case 'risk':
+      case 'risk_matrix':
+        setActiveTabRaw('intelligence');
+        setSubTab('risk_matrix');
+        break;
+      case 'compliance':
+        setActiveTabRaw('intelligence');
+        setSubTab('compliance');
+        break;
+      case 'remediation':
+        setActiveTabRaw('intelligence');
+        setSubTab('remediation');
+        break;
+      case 'agents':
+      case 'swarm':
+        setActiveTabRaw('swarm');
+        break;
+      case 'datasources':
+        setActiveTabRaw('admin');
+        setSubTab('sources');
+        break;
+      case 'importer':
+        setActiveTabRaw('admin');
+        setSubTab('importer');
+        break;
+      case 'sqlite':
+        setActiveTabRaw('admin');
+        setSubTab('sqlite');
+        break;
+      case 'admin':
+        setActiveTabRaw('admin');
+        break;
+      default:
+        setActiveTabRaw(tab);
+        break;
+    }
+  }, []);
 
   // Load state from SQLite
   const reloadFromDatabase = useCallback(() => {
@@ -172,24 +246,32 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   // Initialize pipeline
-  useEffect(() => {
-    let mounted = true;
-    async function init() {
-      try {
-        await pipelineManager.initialize();
-        if (mounted) {
-          reloadFromDatabase();
-          setIsInitialized(true);
-        }
-      } catch (err) {
-        console.error('Initialization error:', err);
-      }
+  const runInit = useCallback(async () => {
+    setInitError(null);
+    setInitPercent(10);
+    setInitStage('Bootstrapping SQLite WebAssembly engine...');
+    try {
+      await pipelineManager.initialize((stage, pct) => {
+        setInitStage(stage);
+        setInitPercent(pct);
+      });
+      reloadFromDatabase();
+      setIsInitialized(true);
+      setInitPercent(100);
+      setInitStage('Ready');
+    } catch (err: any) {
+      console.error('Initialization error:', err);
+      setInitError(err?.message || 'Failed to initialize database pipeline');
     }
-    init();
-    return () => {
-      mounted = false;
-    };
   }, [reloadFromDatabase]);
+
+  useEffect(() => {
+    runInit();
+  }, [runInit]);
+
+  const retryInit = useCallback(() => {
+    runInit();
+  }, [runInit]);
 
   // Sync NVD implementation
   const syncNvd = async (resultsPerPage = 20) => {
@@ -349,6 +431,10 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <CrispContext.Provider
       value={{
         isInitialized,
+        initStage,
+        initPercent,
+        initError,
+        retryInit,
         isSyncing,
         lastDataUpdate,
         vulnerabilities,
@@ -373,6 +459,8 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         executeRawSql,
         activeTab,
         setActiveTab,
+        subTab,
+        setSubTab,
         provenanceFilter,
         setProvenanceFilter,
         searchQuery,

@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  crisp-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crisp-platform
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CRISP_MODE=${CRISP_MODE:-PRODUCTION}
+      - CRISP_SESSION_SECRET=${CRISP_SESSION_SECRET:-change_in_production_secret_key_32chars}
+      - CRISP_DB_PATH=/app/data/crisp.db
+      - CRISP_CHROMA_DIR=/app/data/chroma_db
+      - CRISP_QUEUE_CAPACITY=${CRISP_QUEUE_CAPACITY:-5000}
+      - CRISP_QUEUE_WORKERS=${CRISP_QUEUE_WORKERS:-2}
+      - NVD_API_KEY=${NVD_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - SPLUNK_HEC_URL=${SPLUNK_HEC_URL}
+      - SPLUNK_HEC_TOKEN=${SPLUNK_HEC_TOKEN}
+      - FALCON_CLIENT_ID=${FALCON_CLIENT_ID}
+      - FALCON_CLIENT_SECRET=${FALCON_CLIENT_SECRET}
+    volumes:
+      # Persistent storage: SQLite database, ChromaDB vectors, and automated backups
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Optional Distributed Queue Scale-Out Service
+  # Enable with: docker compose --profile distributed-queue up -d
+  redis:
+    image: redis:7-alpine
+    container_name: crisp-redis-queue
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    profiles:
+      - distributed-queue
+
+volumes:
+  redis_data:
+    driver: local

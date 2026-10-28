@@ -4,25 +4,20 @@ import {
   LayoutDashboard,
   Radio,
   ShieldAlert,
-  Activity,
-  Calculator,
-  Award,
-  Database,
-  FileSpreadsheet,
-  Terminal,
-  Trash2,
-  Sliders,
-  CheckCircle,
-  ExternalLink,
-  GitMerge,
+  BrainCircuit,
+  SlidersHorizontal,
+  Shield,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 
-interface NavItem {
+interface PrimaryNavItem {
   id: string;
   label: string;
   icon: React.ElementType;
   badge?: string;
-  badgeColor?: string;
+  badgeVariant?: 'cyan' | 'indigo' | 'amber' | 'slate';
+  description: string;
 }
 
 export const Sidebar: React.FC = () => {
@@ -32,174 +27,133 @@ export const Sidebar: React.FC = () => {
     vulnerabilities,
     securityEvents,
     isDemoModeActive,
-    toggleDemoMode,
-    demoStreamSpeed,
-    setDemoStreamSpeed,
-    clearSyntheticEvents,
   } = useCrisp();
 
-  const realVulnCount = vulnerabilities.filter((v) => v.isRealData).length;
-  const realEventCount = securityEvents.filter((e) => e.isRealData).length;
-  const demoEventCount = securityEvents.filter((e) => !e.isRealData).length;
-
-  const NAV_ITEMS: NavItem[] = [
+  // Exactly five primary navigation items as required by specification
+  const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
+    {
+      id: 'overview',
+      label: 'Overview',
+      icon: LayoutDashboard,
+      description: 'Posture, risk score & metrics',
+    },
     {
       id: 'live',
       label: 'Live Monitoring',
       icon: Radio,
-      badge: 'SIMULATOR',
-      badgeColor: 'bg-amber-950/80 text-amber-300 border border-amber-800 animate-pulse',
+      badge: isDemoModeActive ? 'SIM' : 'STREAM',
+      badgeVariant: isDemoModeActive ? 'amber' : 'cyan',
+      description: 'Real-time telemetry & simulation',
     },
     {
-      id: 'dashboard',
-      label: 'Executive Dashboard',
-      icon: LayoutDashboard,
-    },
-    {
-      id: 'vulnerabilities',
-      label: 'Vulnerability Intelligence',
+      id: 'intelligence',
+      label: 'Security Intelligence',
       icon: ShieldAlert,
-      badge: `${realVulnCount} CVEs`,
-      badgeColor: 'bg-emerald-950 text-emerald-400 border border-emerald-800',
+      badge: `${vulnerabilities.length}`,
+      badgeVariant: 'slate',
+      description: 'CVEs, KEV, findings & risk matrix',
     },
     {
-      id: 'events',
-      label: 'Security Incidents & Events',
-      icon: Activity,
-      badge: `${securityEvents.length}`,
-      badgeColor: 'bg-sky-950 text-sky-400 border border-sky-800',
+      id: 'swarm',
+      label: 'AI Swarm',
+      icon: BrainCircuit,
+      badge: 'LangGraph',
+      badgeVariant: 'indigo',
+      description: '7-agent autonomous investigations',
     },
     {
-      id: 'findings',
-      label: 'Correlated Findings',
-      icon: GitMerge,
-      badge: 'Unified',
-      badgeColor: 'bg-cyan-950 text-cyan-400 border border-cyan-800',
-    },
-    {
-      id: 'risk',
-      label: 'Cyber Risk Matrix & Engine',
-      icon: Calculator,
-    },
-    {
-      id: 'compliance',
-      label: 'NIST CSF 2.0 Compliance',
-      icon: Award,
-    },
-    {
-      id: 'datasources',
-      label: 'Data Sources & Integrity',
-      icon: Database,
-      badge: 'Live Status',
-      badgeColor: 'bg-amber-950 text-amber-400 border border-amber-800',
-    },
-    {
-      id: 'importer',
-      label: 'CSV Importer & Mapping',
-      icon: FileSpreadsheet,
-    },
-    {
-      id: 'sqlite',
-      label: 'SQLite Database Inspector',
-      icon: Terminal,
+      id: 'admin',
+      label: 'Data & Administration',
+      icon: SlidersHorizontal,
+      description: 'Sources, SQL inspector & sync',
     },
   ];
 
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 min-h-[calc(100vh-4rem)]">
-      {/* Navigation Links */}
-      <nav className="p-3 space-y-1 flex-1">
+    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 min-h-[calc(100vh-3.5rem)] select-none">
+      {/* Primary Navigation Section */}
+      <div className="p-3">
         <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          Operational Views
+          Primary Operations
         </div>
+        <nav className="space-y-1">
+          {PRIMARY_NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
 
-        {NAV_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const isActive = activeTab === item.id;
-
-          return (
-            <button
-              key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold transition-all ${
-                isActive
-                  ? 'bg-cyan-950/70 text-cyan-300 border border-cyan-700/50 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
-                <span>{item.label}</span>
-              </div>
-              {item.badge && (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${item.badgeColor || 'bg-slate-800 text-slate-300'}`}>
-                  {item.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Streamlit-style Sidebar Controls Widget */}
-      <div className="p-4 border-t border-slate-800/80 bg-slate-950/80 space-y-4">
-        {/* Academic Demo Controls */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-purple-400" /> Demo Simulator
-            </span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-800">
-              {demoEventCount} Mock Evts
-            </span>
-          </div>
-
-          <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2.5">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Streaming Speed:</span>
-              <select
-                value={demoStreamSpeed}
-                onChange={(e) => setDemoStreamSpeed(Number(e.target.value))}
-                className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-slate-300 text-xs font-mono"
-              >
-                <option value={1500}>1.5 sec (Fast)</option>
-                <option value={3500}>3.5 sec (Normal)</option>
-                <option value={6000}>6.0 sec (Slow)</option>
-              </select>
-            </div>
-
-            <div className="flex gap-1.5">
+            return (
               <button
-                onClick={toggleDemoMode}
-                className={`flex-1 py-1 rounded text-xs font-semibold transition-colors ${
-                  isDemoModeActive
-                    ? 'bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700'
-                    : 'bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-700'
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-semibold transition-all text-left group ${
+                  isActive
+                    ? 'bg-slate-900 text-cyan-300 border border-cyan-800/60 shadow-sm shadow-cyan-950/40'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60 border border-transparent'
                 }`}
               >
-                {isDemoModeActive ? 'Stop Stream' : 'Start Stream'}
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors ${
+                      isActive
+                        ? 'bg-cyan-950 text-cyan-400 border border-cyan-800/80'
+                        : 'bg-slate-900 text-slate-400 group-hover:text-slate-300 border border-slate-800'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="truncate">
+                    <div className={`truncate leading-tight ${isActive ? 'text-white' : 'text-slate-300'}`}>
+                      {item.label}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-normal truncate mt-0.5">
+                      {item.description}
+                    </div>
+                  </div>
+                </div>
+
+                {item.badge && (
+                  <span
+                    className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 ml-1.5 ${
+                      item.badgeVariant === 'indigo'
+                        ? 'bg-indigo-950 text-indigo-300 border border-indigo-800/80'
+                        : item.badgeVariant === 'amber'
+                        ? 'bg-amber-950 text-amber-300 border border-amber-800/80'
+                        : item.badgeVariant === 'cyan'
+                        ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/80'
+                        : 'bg-slate-900 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </button>
-              {demoEventCount > 0 && (
-                <button
-                  onClick={clearSyntheticEvents}
-                  title="Purge only synthetic events from SQLite"
-                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-rose-400 border border-slate-700 text-xs transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Operational Footprint & System Spec */}
+      <div className="p-3 border-t border-slate-900/80 space-y-2">
+        <div className="p-3 rounded-lg bg-slate-900/40 border border-slate-800/80 space-y-2 text-xs">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 font-medium">Platform Core</span>
+            <span className="text-cyan-400 font-mono font-bold">CRISP 2.0</span>
+          </div>
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 font-medium">Supervised Multi-Agent</span>
+            <span className="text-indigo-400 font-mono text-[10px]">7 Agents</span>
+          </div>
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 font-medium">Local SQLite Engine</span>
+            <span className="text-emerald-400 font-mono text-[10px]">WASM Active</span>
           </div>
         </div>
 
-        {/* Database Integrity Badge */}
-        <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
-          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
-            <CheckCircle className="w-3.5 h-3.5" /> SQLite WASM Engine
-          </div>
-          <p className="text-[10px] text-slate-400">
-            Real relational storage with normalized tables and SQL indexes.
-          </p>
+        <div className="text-[10px] text-slate-400 text-center font-mono">
+          Strict 5-Option Architecture
         </div>
       </div>
     </aside>

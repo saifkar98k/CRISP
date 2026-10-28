@@ -234,7 +234,24 @@ def init_correlation_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vuln_cvss ON vulnerabilities(cvss_score);")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vuln_kev ON vulnerabilities(known_exploited);")
+        cursor.execute("PRAGMA table_info(vulnerabilities);")
+        vuln_cols = {row[1] for row in cursor.fetchall()}
+        if "known_exploited" not in vuln_cols and "is_known_exploited" not in vuln_cols:
+            try:
+                cursor.execute("ALTER TABLE vulnerabilities ADD COLUMN known_exploited INTEGER DEFAULT 0;")
+                vuln_cols.add("known_exploited")
+            except Exception:
+                pass
+        if "kev_due_date" not in vuln_cols:
+            try:
+                cursor.execute("ALTER TABLE vulnerabilities ADD COLUMN kev_due_date TEXT;")
+                vuln_cols.add("kev_due_date")
+            except Exception:
+                pass
+        if "known_exploited" in vuln_cols:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_vuln_kev ON vulnerabilities(known_exploited);")
+        elif "is_known_exploited" in vuln_cols:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_vuln_kev ON vulnerabilities(is_known_exploited);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_findings_risk_score ON security_findings(risk_score);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_findings_severity ON security_findings(severity);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_findings_nist ON security_findings(nist_function);")
@@ -338,12 +355,13 @@ def init_correlation_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     now_iso,
                 ),
             ]
+            kev_col_name = "known_exploited" if "known_exploited" in vuln_cols else "is_known_exploited"
             cursor.executemany(
-                """
+                f"""
                 INSERT OR REPLACE INTO vulnerabilities (
                     cve_id, description, cvss_score, severity, published_date,
                     modified_date, cwe, affected_products, references_json,
-                    source, known_exploited, kev_due_date, created_at, updated_at
+                    source, {kev_col_name}, kev_due_date, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 default_vulns,

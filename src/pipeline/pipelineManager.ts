@@ -44,15 +44,20 @@ import defaultMappingConfig from '../data/default_csv_mapping.json';
 export class PipelineManager {
   private isInitialized = false;
 
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return;
+  async initialize(onProgress?: (stage: string, percent: number) => void): Promise<void> {
+    if (this.isInitialized) {
+      if (onProgress) onProgress('Complete', 100);
+      return;
+    }
 
     const t0 = performance.now();
 
     // 1. Initialize SQLite Database tables
+    if (onProgress) onProgress('Initializing WebAssembly SQLite Database...', 15);
     await crispDb.init();
 
     // 2. Check if assets exist; seed if empty
+    if (onProgress) onProgress('Loading Enterprise Assets & Criticality Tiers...', 30);
     const existingAssets = crispDb.getAssets();
     if (existingAssets.length === 0) {
       for (const a of INITIAL_ENTERPRISE_ASSETS) {
@@ -61,23 +66,27 @@ export class PipelineManager {
     }
 
     // 3. Check if NIST controls exist; seed if empty
+    if (onProgress) onProgress('Evaluating NIST CSF 2.0 Control Baselines...', 45);
     const existingControls = crispDb.getNistControls();
     if (existingControls.length === 0) {
       crispDb.upsertNistControls(INITIAL_NIST_CONTROLS);
     }
 
     // 4. Load baseline CISA KEV
+    if (onProgress) onProgress('Hydrating CISA Known Exploited Vulnerabilities Catalog...', 60);
     await cisaKevProvider.loadCatalog(false);
 
     // 5. Check if vulnerabilities exist; if empty, run initial NVD + KEV pipeline
     let vulns = crispDb.getVulnerabilities();
     if (vulns.length === 0) {
+      if (onProgress) onProgress('Ingesting Vulnerability Intelligence...', 75);
       await this.syncVulnerabilityIntelligence({ forceRefresh: false });
     }
 
     // 6. Check if events exist; if empty, import default historical CSV
     const events = crispDb.getSecurityEvents(10);
     if (events.length === 0) {
+      if (onProgress) onProgress('Correlating Historical Incident Telemetry...', 85);
       await this.importHistoricalSecurityEvents();
     }
 
@@ -90,9 +99,11 @@ export class PipelineManager {
     }
 
     // 8. Initial risk and compliance recalculation
+    if (onProgress) onProgress('Calculating Multi-Factor Cyber Risk Matrix...', 95);
     await this.recalculateAllRisksAndCompliance();
 
     this.isInitialized = true;
+    if (onProgress) onProgress('CRISP Platform Ready', 100);
 
     crispDb.logPipelineExecution({
       id: `INIT-${Date.now()}`,

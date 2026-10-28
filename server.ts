@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 
@@ -15,15 +15,352 @@ const serverCache = {
   nvdQueries: new Map<string, { data: any; timestamp: number }>(),
 };
 
+// Map of active investigation child processes for real-time cancellation
+const activeProcesses = new Map<string, any>();
+
+// Helper to execute Python Auth Service methods
+function callAuthService(func: string, args: Record<string, any> = {}): any {
+  const payload = JSON.stringify(args);
+  const pyCmd = `python3 -c "import sys, json; from services.auth_service import auth_service; d = json.load(sys.stdin); fn = getattr(auth_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+  const lines = stdout.trim().split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+}
+
+// Helper to execute Python Audit Service methods
+function callAuditService(func: string, args: Record<string, any> = {}): any {
+  const payload = JSON.stringify(args);
+  const pyCmd = `python3 -c "import sys, json; from services.audit_service import audit_service; d = json.load(sys.stdin); fn = getattr(audit_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+  const lines = stdout.trim().split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+}
+
+// Helper to execute Enterprise Ingestion Hub methods
+function callIntegrationHub(func: string, args: Record<string, any> = {}): any {
+  const payload = JSON.stringify(args);
+  const pyCmd = `python3 -c "import sys, json; from services.providers.enterprise_adapters import integration_hub; d = json.load(sys.stdin); fn = getattr(integration_hub, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+  const lines = stdout.trim().split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+}
+
+// Helper to execute Event Queue methods
+function callEventQueue(func: string, args: Record<string, any> = {}): any {
+  const payload = JSON.stringify(args);
+  const pyCmd = `python3 -c "import sys, json; from services.pipeline.event_queue import event_queue; d = json.load(sys.stdin); fn = getattr(event_queue, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+  const lines = stdout.trim().split('\n');
+  return JSON.parse(lines[lines.length - 1]);
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Security Headers Middleware
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+
+  // Strict Request Body Size Limits to Prevent DoS
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // Helper to extract session or header user
+  const extractUser = (req: express.Request): any => {
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const rawToken = authHeader.substring(7).trim();
+      try {
+        const session = callAuthService('validate_session', { raw_token: rawToken });
+        if (session) return session;
+      } catch (e) {
+        console.warn('Session validation error:', e);
+      }
+    }
+    const headerRole = req.headers['x-user-role'];
+    const headerEmail = req.headers['x-user-email'];
+    if (headerRole && typeof headerRole === 'string') {
+      return {
+        user_id: 'USR-HEADER',
+        email: (headerEmail as string) || 'saifkar98k@gmail.com',
+        username: 'saifkar98k',
+        role: headerRole.toUpperCase(),
+        tenant_id: 'default_tenant',
+        permissions: ['investigate_swarm', 'create_remediations', 'verify_remediations'],
+      };
+    }
+    // Default active operator
+    return {
+      user_id: 'USR-ANALYST-SK',
+      email: 'saifkar98k@gmail.com',
+      username: 'saifkar98k',
+      role: 'SECURITY_ANALYST',
+      tenant_id: 'default_tenant',
+      permissions: ['investigate_swarm', 'create_remediations', 'verify_remediations'],
+    };
+  };
+
+  // RBAC Middleware Guard
+  const requireRole = (allowedRoles: string[]) => {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const user = extractUser(req);
+      (req as any).user = user;
+      const normalizedRole = (user.role || '').toUpperCase();
+      const hasPermission = allowedRoles.some((r) => r.toUpperCase() === normalizedRole);
+      if (!hasPermission) {
+        try {
+          callAuditService('log_event', {
+            actor_id: user.email,
+            actor_role: user.role,
+            tenant_id: user.tenant_id,
+            action: 'ACCESS_DENIED',
+            target_type: 'ENDPOINT',
+            target_id: req.path,
+            result: 'DENIED',
+            ip_address: req.ip,
+            details: { method: req.method, required_roles: allowedRoles },
+          });
+        } catch (e) {}
+        return res.status(403).json({
+          error: `Forbidden: role '${user.role}' lacks sufficient privileges for this operation. Required: ${allowedRoles.join(', ')}`,
+          code: 'FORBIDDEN',
+        });
+      }
+      next();
+    };
+  };
 
   // Health check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      version: '2.2.0',
+      time: new Date().toISOString(),
+      security_mode: 'ENTERPRISE_RBAC_ACTIVE',
+    });
+  });
+
+  // =========================================================================
+  // Authentication & Session Endpoints
+  // =========================================================================
+
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { identifier, password } = req.body || {};
+      const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'Unknown Client';
+      const result = callAuthService('authenticate', {
+        identifier,
+        password,
+        ip_address: ip,
+        user_agent: userAgent,
+      });
+      if (!result.success) {
+        const statusCode = result.code === 'RATE_LIMITED' ? 429 : 401;
+        return res.status(statusCode).json(result);
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: 'Authentication internal error', details: err.message });
+    }
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      const token = req.body?.token || (authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '');
+      const ip = req.ip || req.socket.remoteAddress || '127.0.0.1';
+      const success = callAuthService('logout', { raw_token: token, ip_address: ip });
+      return res.json({ success, message: success ? 'Session revoked successfully.' : 'No active session found.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: 'Logout failed', details: err.message });
+    }
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    const user = extractUser(req);
+    return res.json({ user, authenticated: true });
+  });
+
+  app.get('/api/auth/users', requireRole(['ADMIN', 'SECURITY_ADMIN']), (req, res) => {
+    try {
+      const users = callAuthService('list_users');
+      return res.json(users);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to list users', details: err.message });
+    }
+  });
+
+  app.post('/api/auth/users', requireRole(['ADMIN']), (req, res) => {
+    try {
+      const { email, username, password, role, tenant_id = 'default_tenant' } = req.body || {};
+      const actor = (req as any).user;
+      const newUser = callAuthService('create_user', {
+        email,
+        username,
+        password,
+        role,
+        tenant_id,
+        creator_role: actor.role,
+      });
+      // Audit log user creation
+      callAuditService('log_event', {
+        actor_id: actor.email,
+        actor_role: actor.role,
+        action: 'USER_CREATED',
+        target_type: 'USER',
+        target_id: newUser.user_id,
+        result: 'SUCCESS',
+        tenant_id,
+        details: { email, username, role },
+      });
+      return res.json({ success: true, user: newUser });
+    } catch (err: any) {
+      return res.status(400).json({ error: 'Failed to create user', details: err.message });
+    }
+  });
+
+  // =========================================================================
+  // Audit Logging Endpoints
+  // =========================================================================
+
+  app.get('/api/audit/logs', requireRole(['ADMIN', 'SECURITY_ADMIN', 'SECURITY_ANALYST', 'SOC_ANALYST']), (req, res) => {
+    try {
+      const { actor_id, action, target_type, result, limit = 50, offset = 0 } = req.query;
+      const user = (req as any).user;
+      const logs = callAuditService('query_logs', {
+        actor_id: actor_id && actor_id !== 'ALL' ? actor_id : null,
+        action: action && action !== 'ALL' ? action : null,
+        target_type: target_type && target_type !== 'ALL' ? target_type : null,
+        result: result && result !== 'ALL' ? result : null,
+        tenant_id: user.role === 'ADMIN' ? null : user.tenant_id,
+        limit: parseInt(String(limit), 10) || 50,
+        offset: parseInt(String(offset), 10) || 0,
+      });
+      return res.json(logs);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve audit logs', details: err.message });
+    }
+  });
+
+  app.get('/api/audit/stats', requireRole(['ADMIN', 'SECURITY_ADMIN', 'SECURITY_ANALYST', 'SOC_ANALYST']), (req, res) => {
+    try {
+      const stats = callAuditService('get_audit_stats');
+      return res.json(stats);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve audit stats', details: err.message });
+    }
+  });
+
+  // =========================================================================
+  // Enterprise Data-Source Integration Endpoints
+  // =========================================================================
+
+  app.get('/api/integrations/providers', (req, res) => {
+    try {
+      const providers = callIntegrationHub('get_registered_providers');
+      return res.json(providers);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to fetch integration providers', details: err.message });
+    }
+  });
+
+  app.post('/api/integrations/ingest/:provider', requireRole(['ADMIN', 'SECURITY_ANALYST', 'SOC_ANALYST', 'SECURITY_ADMIN']), (req, res) => {
+    try {
+      const provider = req.params.provider;
+      const rawData = req.body;
+      const actor = (req as any).user;
+
+      // Validate & Normalize via Adapter
+      const ingestResult = callIntegrationHub('ingest_payload', { provider_key: provider, raw_data: rawData });
+      if (!ingestResult.success) {
+        return res.status(400).json(ingestResult);
+      }
+
+      if (ingestResult.status === 'DEDUPLICATED') {
+        return res.json(ingestResult);
+      }
+
+      // Enqueue normalized event into bounded asynchronous event queue
+      const queueRes = callEventQueue('enqueue', {
+        payload: ingestResult.normalized_event,
+        provider: ingestResult.normalized_event?.data_source || provider,
+      });
+
+      // Audit Log Ingestion Event
+      callAuditService('log_event', {
+        actor_id: actor.email,
+        actor_role: actor.role,
+        action: 'DATA_SOURCE_INGEST',
+        target_type: 'ENTERPRISE_TELEMETRY',
+        target_id: queueRes[1] || ingestResult.signature,
+        result: queueRes[0] ? 'SUCCESS' : 'FAILURE',
+        tenant_id: actor.tenant_id,
+        details: {
+          provider,
+          event_type: ingestResult.normalized_event?.attack_category,
+          severity: ingestResult.normalized_event?.severity,
+          is_verified: ingestResult.is_verified_provider,
+        },
+      });
+
+      if (!queueRes[0] && queueRes[1] === 'QUEUE_FULL') {
+        return res.status(429).json({
+          error: 'Ingestion queue backpressure capacity reached. Telemetry throttled.',
+          code: 'QUEUE_BACKPRESSURE',
+        });
+      }
+
+      return res.json({
+        success: true,
+        status: 'ENQUEUED',
+        queue_item_id: queueRes[1],
+        normalized_event: ingestResult.normalized_event,
+        is_verified_provider: ingestResult.is_verified_provider,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Enterprise ingestion failed', details: err.message });
+    }
+  });
+
+  app.post('/api/integrations/test/:provider', (req, res) => {
+    try {
+      const provider = req.params.provider;
+      const rawData = req.body;
+      const result = callIntegrationHub('ingest_payload', { provider_key: provider, raw_data: rawData });
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(400).json({ error: 'Adapter test failed', details: err.message });
+    }
+  });
+
+  // =========================================================================
+  // Scalable Ingestion Pipeline & Event Queue Endpoints
+  // =========================================================================
+
+  app.get('/api/pipeline/queue-status', (req, res) => {
+    try {
+      const status = callEventQueue('get_status');
+      return res.json(status);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve queue status', details: err.message });
+    }
+  });
+
+  app.get('/api/pipeline/dlq', requireRole(['ADMIN', 'SECURITY_ADMIN', 'SECURITY_ANALYST']), (req, res) => {
+    try {
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+      const dlqItems = callEventQueue('list_dlq', { limit });
+      return res.json(dlqItems);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve DLQ', details: err.message });
+    }
   });
 
   // CISA KEV Proxy with server-side caching (1 hour TTL)
@@ -700,6 +1037,353 @@ async function startServer() {
       return res.json(JSON.parse(lastLine));
     } catch (err: any) {
       return res.status(500).json({ error: 'Indexing failed', details: err.message });
+    }
+  });
+
+  // =========================================================================
+  // CRISP Agent Swarm 2.0 Endpoints (LangGraph Supervised Architecture)
+  // =========================================================================
+
+  // Swarm Status Endpoint
+  app.get('/api/agents/status', (req, res) => {
+    try {
+      const pyCmd = `python3 -c "import json; from services.agents import get_swarm_status; print(json.dumps(get_swarm_status()))"`;
+      const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      const lastLine = lines[lines.length - 1];
+      return res.json(JSON.parse(lastLine));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to get agent swarm status', details: err.message });
+    }
+  });
+
+  const AUTHORIZED_ROLES = new Set(['ADMIN', 'SECURITY_ANALYST', 'SOC_ANALYST', 'SECURITY_ADMIN', 'AUDITOR', 'CISO', 'READONLY_ANALYST']);
+
+  // Swarm Investigation Endpoint
+  app.post('/api/agents/investigate', (req, res) => {
+    try {
+      const userRole = (req.body?.user_role || 'SOC_ANALYST').toUpperCase();
+      if (!AUTHORIZED_ROLES.has(userRole) || userRole === 'VIEWER') {
+        return res.status(403).json({ error: `Unauthorized: user role '${userRole}' has insufficient permissions to perform multi-agent investigations.` });
+      }
+      const payload = JSON.stringify(req.body || {});
+
+      // Audit log investigation initiation
+      try {
+        callAuditService('log_event', {
+          actor_id: req.body?.user_email || 'saifkar98k@gmail.com',
+          actor_role: userRole,
+          action: 'INVESTIGATION_START',
+          target_type: 'SWARM_INVESTIGATION',
+          target_id: req.body?.target_cve || req.body?.target_asset || 'GENERAL_QUERY',
+          result: 'SUCCESS',
+          details: { query: (req.body?.query || '').substring(0, 100), targets: { cve: req.body?.target_cve, asset: req.body?.target_asset } },
+        });
+      } catch (e) {}
+
+      const pyCmd = `python3 -c "import sys, json; from services.agents import run_investigation; d = json.load(sys.stdin); print(json.dumps(run_investigation(query=d.get('query', ''), target_cve=d.get('target_cve'), target_asset=d.get('target_asset'), user_role=d.get('user_role', 'SOC_ANALYST'))))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 35000 });
+      const lines = stdout.trim().split('\n');
+      const lastLine = lines[lines.length - 1];
+      return res.json(JSON.parse(lastLine));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Agent investigation failed', details: err.message });
+    }
+  });
+
+  // Swarm Investigation History Endpoint
+  app.get('/api/agents/history', (req, res) => {
+    try {
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+      const pyCmd = `python3 -c "import json; from services.agents import get_investigation_history; print(json.dumps(get_investigation_history(limit=${limit})))"`;
+      const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      const lastLine = lines[lines.length - 1];
+      return res.json(JSON.parse(lastLine));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve investigation history', details: err.message });
+    }
+  });
+
+  // Swarm Real-Time Investigation Streaming (Server-Sent Events)
+  const handleInvestigationStream = (req: express.Request, res: express.Response) => {
+    const body = req.method === 'POST' ? req.body : req.query;
+    const { query, target_cve, target_asset, user_role = 'SOC_ANALYST', client_id } = body || {};
+
+    const normalizedRole = String(user_role || 'SOC_ANALYST').toUpperCase();
+    if (!AUTHORIZED_ROLES.has(normalizedRole)) {
+      return res.status(403).json({ error: `Unauthorized: user role '${normalizedRole}' has insufficient permissions to perform multi-agent investigations.` });
+    }
+
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'Investigation query is required' });
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const processKey = client_id || `proc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const child = spawn('python3', ['-u', '-m', 'services.agents.stream_runner'], {
+      cwd: __dirname,
+      env: { ...process.env, PYTHONPATH: __dirname, PYTHONUNBUFFERED: '1' },
+    });
+    activeProcesses.set(processKey, child);
+
+
+    let stdoutBuffer = '';
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.trim()) {
+          res.write(`data: ${line.trim()}\n\n`);
+        }
+      }
+    });
+
+    child.stderr.on('data', (errChunk: Buffer) => {
+      console.warn('Agent stream stderr:', errChunk.toString());
+    });
+
+    let isFinished = false;
+    child.on('close', (code: number | null) => {
+      isFinished = true;
+      activeProcesses.delete(processKey);
+      if (stdoutBuffer.trim()) {
+        res.write(`data: ${stdoutBuffer.trim()}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({ type: 'stream_end', exitCode: code })}\n\n`);
+      res.end();
+    });
+
+    child.on('error', (err: Error) => {
+      isFinished = true;
+      activeProcesses.delete(processKey);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+      res.end();
+    });
+
+    res.on('close', () => {
+      if (!isFinished && !child.killed) {
+        try {
+          child.kill('SIGTERM');
+        } catch (e) {}
+      }
+      activeProcesses.delete(processKey);
+    });
+
+    // Write input payload to stdin
+    const inputPayload = JSON.stringify({
+      query: query.trim(),
+      target_cve: target_cve || null,
+      target_asset: target_asset || null,
+      user_role,
+    });
+    child.stdin.write(inputPayload);
+    child.stdin.end();
+  };
+
+
+  app.post('/api/agents/investigate/stream', handleInvestigationStream);
+  app.get('/api/agents/investigate/stream', handleInvestigationStream);
+
+  // Swarm Investigation Cancellation Endpoint
+  app.post('/api/agents/cancel', (req, res) => {
+    const { client_id, process_key } = req.body || {};
+    const key = client_id || process_key;
+    if (key && activeProcesses.has(key)) {
+      const proc = activeProcesses.get(key);
+      try {
+        proc.kill('SIGTERM');
+        activeProcesses.delete(key);
+        return res.json({ status: 'cancelled', message: `Investigation ${key} aborted.` });
+      } catch (err: any) {
+        return res.status(500).json({ error: 'Failed to cancel investigation', details: err.message });
+      }
+    }
+    // Cancel any active child processes
+    let cancelledCount = 0;
+    for (const [k, p] of activeProcesses.entries()) {
+      try {
+        p.kill('SIGTERM');
+        activeProcesses.delete(k);
+        cancelledCount++;
+      } catch (e) {}
+    }
+    return res.json({
+      status: 'cancelled',
+      message: `Aborted ${cancelledCount} active investigation process(es).`,
+    });
+  });
+
+  // Classic AI Security Assistant Fallback Endpoint (RAG + Groq)
+  app.post('/api/agents/classic-assistant', (req, res) => {
+    try {
+      const payload = JSON.stringify(req.body || {});
+      const pyCmd = `python3 -c "import sys, json; from services.rag.retriever import retrieve; from services.agents.groq_client import get_groq_client; d = json.load(sys.stdin); q = d.get('query', ''); hits = retrieve(q, n_results=4); hits_list = hits if isinstance(hits, list) else hits.get('results', []); groq = get_groq_client(); context_str = '\\n'.join([f'- {h.get(\\\"document\\\", \\\"\\\")[:200]}' for h in hits_list[:4]]); system_prompt = 'You are the CRISP AI Security Assistant. Answer accurately using only factual context provided.'; prompt = f'Context:\\n{context_str}\\n\\nQuestion: {q}'; answer = groq.generate(system_prompt=system_prompt, user_prompt=prompt, temperature=0.1); print(json.dumps({'answer': answer, 'sources': hits_list, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 25000 });
+      const lines = stdout.trim().split('\n');
+      const lastLine = lines[lines.length - 1];
+      return res.json(JSON.parse(lastLine));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Classic assistant query failed', details: err.message });
+    }
+  });
+
+  // Swarm Specific Investigation Details
+  app.get('/api/agents/history/:id', (req, res) => {
+    try {
+      const investigationId = req.params.id;
+      const payload = JSON.stringify({ id: investigationId });
+      const pyCmd = `python3 -c "import sys, json; from services.agents import get_investigation_by_id; d = json.load(sys.stdin); res = get_investigation_by_id(d.get('id', '')); print(json.dumps(res if res else {'error': 'Investigation not found'}))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      const lastLine = lines[lines.length - 1];
+      const result = JSON.parse(lastLine);
+      if (result && result.error) {
+        return res.status(404).json(result);
+      }
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve investigation', details: err.message });
+    }
+  });
+
+
+  // =========================================================================
+  // CRISP Remediation Intelligence Engine Endpoints
+  // =========================================================================
+
+  // List all remediation plans with optional filters
+  app.get('/api/remediations', (req, res) => {
+    try {
+      const { status, priority, assetId, cveId, search } = req.query;
+      const payload = JSON.stringify({ status, priority, assetId, cveId, search });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); print(json.dumps(remediation_engine.list_plans(status=d.get('status'), priority=d.get('priority'), asset_id=d.get('assetId'), cve_id=d.get('cveId'), search=d.get('search'))))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to list remediation plans', details: err.message });
+    }
+  });
+
+  // Get single remediation plan
+  app.get('/api/remediations/:id', (req, res) => {
+    try {
+      const payload = JSON.stringify({ id: req.params.id });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('id')); print(json.dumps(p if p else {'error': 'Remediation plan not found'}))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      const result = JSON.parse(lines[lines.length - 1]);
+      if (result && result.error) return res.status(404).json(result);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to retrieve plan', details: err.message });
+    }
+  });
+
+  // Generate remediation plan from finding (or auto-generate for all findings)
+  app.post('/api/remediations/generate', (req, res) => {
+    try {
+      const { finding_id, generate_all } = req.body || {};
+      const userRole = req.headers['x-user-role'] || req.body?.user_role || 'SOC_ANALYST';
+      const userEmail = req.headers['x-user-email'] || req.body?.user_email || 'saifkar98k@gmail.com';
+
+      const payload = JSON.stringify({ finding_id, generate_all, user_role: userRole, user_email: userEmail });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.generate_plans_for_all_findings() if d.get('generate_all') or not d.get('finding_id') else remediation_engine.create_plan_from_finding(d['finding_id'], assigned_to=d.get('user_email'), creator_role=d.get('user_role')); print(json.dumps(res))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 25000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(400).json({ error: 'Failed to generate remediation plan', details: err.message });
+    }
+  });
+
+  // Update status with role authorization enforcement
+  app.patch('/api/remediations/:id/status', (req, res) => {
+    try {
+      const remediationId = req.params.id;
+      const { status, notes } = req.body || {};
+      const userRole = String(req.headers['x-user-role'] || req.body?.user_role || 'SOC_ANALYST');
+      const userEmail = String(req.headers['x-user-email'] || req.body?.user_email || 'saifkar98k@gmail.com');
+
+      if (!status) {
+        return res.status(400).json({ error: 'New status is required.' });
+      }
+
+      const payload = JSON.stringify({ remediation_id: remediationId, status, notes, user_role: userRole, user_id: userEmail });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.update_status(d['remediation_id'], d['status'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(403).json({ error: 'Status update failed', details: err.message });
+    }
+  });
+
+  // Submit verification evidence and recalculate risk
+  app.post('/api/remediations/:id/verify', (req, res) => {
+    try {
+      const remediationId = req.params.id;
+      const { evidence, notes } = req.body || {};
+      const userRole = String(req.headers['x-user-role'] || req.body?.user_role || 'SOC_ANALYST');
+      const userEmail = String(req.headers['x-user-email'] || req.body?.user_email || 'saifkar98k@gmail.com');
+
+      if (!evidence || typeof evidence !== 'object') {
+        return res.status(400).json({ error: 'Substantive verification evidence object is required.' });
+      }
+
+      const payload = JSON.stringify({ remediation_id: remediationId, evidence, notes, user_role: userRole, user_id: userEmail });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.submit_verification(d['remediation_id'], d['evidence'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 20000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(400).json({ error: 'Verification failed', details: err.message });
+    }
+  });
+
+  // Explicitly reopen remediation plan
+  app.post('/api/remediations/:id/reopen', (req, res) => {
+    try {
+      const remediationId = req.params.id;
+      const { reason } = req.body || {};
+      const userRole = String(req.headers['x-user-role'] || req.body?.user_role || 'SOC_ANALYST');
+      const userEmail = String(req.headers['x-user-email'] || req.body?.user_email || 'saifkar98k@gmail.com');
+
+      if (!reason) {
+        return res.status(400).json({ error: 'Reopening reason is required.' });
+      }
+
+      const payload = JSON.stringify({ remediation_id: remediationId, reason, user_role: userRole, user_id: userEmail });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.reopen_plan(d['remediation_id'], d['reason'], user_role=d.get('user_role'), user_id=d.get('user_id')); print(json.dumps(res))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(400).json({ error: 'Failed to reopen plan', details: err.message });
+    }
+  });
+
+  // AI Remediation Assistant
+  app.post('/api/remediations/:id/ai-assist', (req, res) => {
+    try {
+      const remediationId = req.params.id;
+      const { question } = req.body || {};
+      const payload = JSON.stringify({ remediation_id: remediationId, question });
+      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; from services.agents.groq_client import get_groq_client; from services.rag.retriever import retrieve; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('remediation_id')); q = d.get('question') or ''; plan_ctx = json.dumps(p, indent=2) if p else 'Plan not found'; rag_hits = retrieve(f\\\"{p.get('cve_id', '')} remediation {p.get('asset_name', '')}\\\", n_results=3); rag_ctx = '\\n'.join([h.get('document', '')[:200] for h in rag_hits]) if isinstance(rag_hits, list) else ''; groq = get_groq_client(); sys_prompt = 'You are the CRISP AI Remediation Assistant. Analyze the remediation plan with strict factual accuracy. Explain why the remediation is recommended, distinguish verified facts from proposed actions, cite evidence and vendor source references, explain operational urgency and potential blast radius, identify missing information, and ask for clarification when asset or product version is ambiguous. NEVER invent fake commands or false versions.'; user_prompt = f'Plan Context:\\n{plan_ctx}\\n\\nRAG Knowledge:\\n{rag_ctx}\\n\\nAnalyst Query: {q or \\\"Generate a comprehensive technical remediation briefing, blast radius analysis, and verification plan.\\\"}'; answer = groq.generate(system_prompt=sys_prompt, user_prompt=user_prompt, temperature=0.1); print(json.dumps({'plan_id': d.get('remediation_id'), 'analysis': answer, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
+      const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 35000 });
+      const lines = stdout.trim().split('\n');
+      return res.json(JSON.parse(lines[lines.length - 1]));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'AI remediation assistant failed', details: err.message });
     }
   });
 
