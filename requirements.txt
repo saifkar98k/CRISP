@@ -1,0 +1,9 @@
+# CRISP 2.2 — Optional Python Dependencies
+# The platform runs 100% locally out-of-the-box using the Python standard library.
+# The dependencies below are optional and enhance performance when available:
+
+# Optional: Native Groq SDK (CRISP already includes built-in zero-dependency urllib fallback)
+# groq>=0.9.0
+
+# Optional: Native ChromaDB Vector Store (CRISP already includes built-in embedded vector engine)
+# chromadb>=0.4.24

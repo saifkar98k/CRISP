@@ -193,28 +193,41 @@ python3 -m unittest discover tests
 ## 9. Installation & Startup Commands
 
 ### Prerequisites
-- Node.js 22+
-- Python 3.10+
-- SQLite3
+- **Node.js**: v20 or v22 (npm v10+)
+- **Python**: 3.10+ (standard installation; required for backend multi-agent swarm & correlation)
+- **SQLite3**: Built-in with Python and WebAssembly in browser (no separate database server required)
 
-### Step-by-Step Launch:
+### Windows Quick Start:
+Double-click `start-local.bat` in the project root, or execute:
+```cmd
+start-local.bat
+```
+The script will verify Node.js and Python, install dependencies if missing, ensure WebAssembly binaries are in place, and boot the server at `http://localhost:3000`.
+
+### Cross-Platform Manual Launch (Windows PowerShell / macOS / Linux):
 
 ```bash
 # 1. Install Node.js dependencies
 npm install
 
 # 2. Run Database Schema Migrations & Verifications
+# On Windows: python scripts/migrate.py
 python3 scripts/migrate.py
 
-# 3. (Optional) Run Performance Benchmark Suite
-python3 scripts/run_benchmarks.py
-
-# 4. Verify TypeScript and Compile Applet
+# 3. Verify TypeScript build
 npm run build
 
-# 5. Start CRISP Full-Stack Development Server
+# 4. Start CRISP Full-Stack Development Server (Express API + Vite SPA)
 npm run dev
 # The platform is accessible at: http://localhost:3000
+```
+
+### Health & Readiness Check:
+Verify that the full-stack server is responsive:
+```bash
+# Browser or curl:
+curl http://localhost:3000/api/health
+# Response: {"status":"ok","version":"2.2.0",...}
 ```
 
 ---
@@ -236,18 +249,70 @@ Use the built-in **"Viva Demo"** button located in the top navigation bar to lau
 
 ---
 
-## 11. Troubleshooting & FAQ
+## 11. Environment Configuration & External API Keys
 
-- **Database empty on first clone?**
-  Run `python3 scripts/migrate.py` or restore from `data/backups/crisp_backup_20261028_082619.db`.
-- **Groq API Rate Limits?**
-  CRISP includes automatic deterministic fallback. If `GROQ_API_KEY` is omitted or throttled, all investigations and remediation assistance continue running seamlessly.
-- **Port Conflict on 3000?**
-  The platform is configured for port 3000 (`0.0.0.0:3000`) per container requirements.
+### Zero Mandatory Variables for Local Execution:
+CRISP requires **no external API keys or cloud services** for local development. Out of the box, it initializes the WebAssembly SQLite database, hydrates real CVE catalog records, calculates NIST CSF compliance, and executes multi-agent investigations using built-in deterministic heuristic reasoning.
+
+### Optional Integrations:
+
+| Integration | Environment Variable | Acquisition Link & Notes | Behavior if Omitted |
+| :--- | :--- | :--- | :--- |
+| **Groq Cloud LLM** | `GROQ_API_KEY` | [Obtain a Groq API Key](https://console.groq.com/keys) | AI Swarm gracefully switches to deterministic offline heuristic reasoning without crashing or hallucinating. |
+| **NIST NVD API 2.0** | `NVD_API_KEY` | [Request an NVD API Key](https://nvd.nist.gov/developers/request-an-api-key) | Connects via NIST's unauthenticated public tier (5 req / 30s) or falls back to curated local CVE snapshot. |
+| **Splunk SIEM** | `SPLUNK_HEC_URL`, `SPLUNK_HEC_TOKEN` | Enterprise Splunk HTTP Event Collector | Ingestion hub marks Splunk unconfigured and falls back to local synthetic telemetry. |
+| **CrowdStrike Falcon** | `FALCON_CLIENT_ID`, `FALCON_CLIENT_SECRET` | Falcon Cloud API Client Credentials | Ingestion hub marks CrowdStrike unconfigured and falls back to local synthetic telemetry. |
 
 ---
 
-## 12. Known Limitations & Production Roadmap
+## 12. Windows 10/11 PowerShell Step-by-Step Guide
+
+```powershell
+# 1. Verify installed versions
+node --version       # Expected: v20.x or v22.x
+npm --version        # Expected: v10.x+
+python --version     # Expected: Python 3.10+
+
+# 2. (Optional) Create and activate a Python virtual environment
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+
+# 3. Install Node.js frontend and backend dependencies
+npm install
+
+# 4. Create local configuration file from template (never overwrites existing .env)
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+
+# 5. Initialize SQLite Database Schema & Seed Data
+python scripts/migrate.py
+
+# 6. Run verification test suite
+npm test
+
+# 7. Start the Full-Stack Platform (Express Backend + Vite SPA)
+npm run dev
+
+# Open in your browser: http://localhost:3000
+```
+
+---
+
+## 13. Troubleshooting & FAQ
+
+- **Resolving the 15% "Initializing WebAssembly SQLite Database..." Hang**:
+  - *Cause*: A byte-level mismatch between installed `sql.js` (1.14.2) and `/public/sql-wasm.wasm` previously caused an unhandled Emscripten exception (`TypeError: fd.O is not a function`).
+  - *Fix*: The repository now contains byte-identical binaries (`sql-wasm.wasm` and `sql-wasm-browser.wasm`, 685,235 bytes) and wraps initialization in a 15-second bounded timeout with mutex concurrency locking.
+  - *Recovery*: If ever corrupted, execute `npm run test:lifecycle` to verify byte parity and instantiate the engine.
+- **Database empty on first clone?**
+  Run `python scripts/migrate.py` (Windows) or `python3 scripts/migrate.py` (Linux/macOS).
+- **Groq API Rate Limits or Missing Key?**
+  CRISP includes automatic deterministic fallback. If `GROQ_API_KEY` is omitted or throttled, all investigations and remediation assistance continue running seamlessly.
+- **Port Conflict on 3000?**
+  The platform is configured for port 3000 (`0.0.0.0:3000`). If in use, stop conflicting processes or specify `PORT=3001 npm run dev`.
+
+---
+
+## 14. Known Limitations & Production Roadmap
 
 - **Clustered Database**: Current implementation uses embedded native SQLite; enterprise scale-out can migrate to Cloud SQL (PostgreSQL) using the provisioned adapter schemas.
 - **Active Scanners**: Current verification accepts Nessus/SBOM JSON payloads; production roadmap includes direct Tenable.io and Qualys API connectors.

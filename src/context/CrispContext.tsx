@@ -24,6 +24,7 @@ import { csvDataProvider } from '../providers/csvDataProvider';
 import { Validator } from '../pipeline/validator';
 
 export type ProvenanceFilter = 'ALL' | 'REAL_ONLY' | 'SYNTHETIC_ONLY';
+export type AppLifecycleState = 'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR';
 
 export interface NvdSyncStatusInfo {
   connection: string;
@@ -40,6 +41,7 @@ export interface NvdSyncStatusInfo {
 
 interface CrispContextType {
   // State
+  lifecycleState: AppLifecycleState;
   isInitialized: boolean;
   initStage: string;
   initPercent: number;
@@ -245,11 +247,18 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .catch(() => {});
   }, []);
 
+  const [lifecycleState, setLifecycleState] = useState<AppLifecycleState>('IDLE');
+  const initializingRef = useRef(false);
+
   // Initialize pipeline
-  const runInit = useCallback(async () => {
+  const runInit = useCallback(async (isRetry = false) => {
+    if (initializingRef.current && !isRetry) return;
+    initializingRef.current = true;
+    setLifecycleState('INITIALIZING');
     setInitError(null);
     setInitPercent(10);
     setInitStage('Bootstrapping SQLite WebAssembly engine...');
+
     try {
       await pipelineManager.initialize((stage, pct) => {
         setInitStage(stage);
@@ -257,11 +266,17 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       reloadFromDatabase();
       setIsInitialized(true);
+      setLifecycleState('READY');
       setInitPercent(100);
       setInitStage('Ready');
     } catch (err: any) {
       console.error('Initialization error:', err);
-      setInitError(err?.message || 'Failed to initialize database pipeline');
+      setIsInitialized(false);
+      setLifecycleState('ERROR');
+      const msg = err?.message || 'Failed to initialize database pipeline';
+      setInitError(msg);
+    } finally {
+      initializingRef.current = false;
     }
   }, [reloadFromDatabase]);
 
@@ -270,7 +285,8 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [runInit]);
 
   const retryInit = useCallback(() => {
-    runInit();
+    pipelineManager.resetForRetry();
+    runInit(true);
   }, [runInit]);
 
   // Sync NVD implementation
@@ -430,6 +446,7 @@ export const CrispProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <CrispContext.Provider
       value={{
+        lifecycleState,
         isInitialized,
         initStage,
         initPercent,

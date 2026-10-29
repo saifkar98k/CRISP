@@ -20,12 +20,60 @@ import {
   PipelineExecutionLog
 } from '../types/schemas';
 
+export type DatabaseState = 'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR';
+
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
 function getSqlJs(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
-    sqlPromise = initSqlJs({
-      locateFile: () => '/sql-wasm.wasm',
+    sqlPromise = new Promise<SqlJsStatic>((resolve, reject) => {
+      const timeoutMs = 15000;
+      const timer = setTimeout(() => {
+        sqlPromise = null;
+        reject(
+          new Error(
+            `CRISP-ERR-WASM-TIMEOUT: WebAssembly SQLite initialization timed out after ${timeoutMs}ms. Verify that sql-wasm.wasm and sql-wasm-browser.wasm are accessible in the public directory.`
+          )
+        );
+      }, timeoutMs);
+
+      try {
+        const initFn = typeof initSqlJs === 'function' ? initSqlJs : (initSqlJs as any).default;
+        if (!initFn || typeof initFn !== 'function') {
+          clearTimeout(timer);
+          sqlPromise = null;
+          reject(new Error('CRISP-ERR-SQLJS-MODULE: sql.js initialization module not available or invalid export.'));
+          return;
+        }
+
+        initFn({
+          locateFile: (file: string) => {
+            const cleanName = file.replace(/^\/+/, '');
+            return `/${cleanName}`;
+          },
+        })
+          .then((SQL: SqlJsStatic) => {
+            clearTimeout(timer);
+            resolve(SQL);
+          })
+          .catch((err: any) => {
+            clearTimeout(timer);
+            sqlPromise = null;
+            reject(
+              new Error(
+                `CRISP-ERR-WASM-INIT: Failed to initialize sql.js engine: ${err?.message || String(err)}`
+              )
+            );
+          });
+      } catch (err: any) {
+        clearTimeout(timer);
+        sqlPromise = null;
+        reject(
+          new Error(
+            `CRISP-ERR-WASM-EXEC: Synchronous error invoking sql.js initializer: ${err?.message || String(err)}`
+          )
+        );
+      }
     });
   }
   return sqlPromise;
@@ -33,15 +81,51 @@ function getSqlJs(): Promise<SqlJsStatic> {
 
 export class CrispDatabase {
   private db: Database | null = null;
-  private isInitialized = false;
+  private state: DatabaseState = 'IDLE';
+  private initPromise: Promise<void> | null = null;
+  private lastError: Error | null = null;
+
+  getState(): DatabaseState {
+    return this.state;
+  }
+
+  isReady(): boolean {
+    return this.state === 'READY' && this.db !== null;
+  }
+
+  getLastError(): Error | null {
+    return this.lastError;
+  }
 
   async init(): Promise<void> {
-    if (this.isInitialized && this.db) return;
+    if (this.state === 'READY' && this.db) {
+      return;
+    }
 
-    const SQL = await getSqlJs();
-    this.db = new SQL.Database();
-    this.createTables();
-    this.isInitialized = true;
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.state = 'INITIALIZING';
+    this.lastError = null;
+
+    this.initPromise = (async () => {
+      try {
+        const SQL = await getSqlJs();
+        this.db = new SQL.Database();
+        this.createTables();
+        this.state = 'READY';
+      } catch (err: any) {
+        this.state = 'ERROR';
+        this.lastError = err instanceof Error ? err : new Error(String(err));
+        sqlPromise = null;
+        throw err;
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   private createTables(): void {

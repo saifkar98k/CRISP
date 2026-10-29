@@ -133,6 +133,161 @@ const PRESET_QUERIES: Array<{
   },
 ];
 
+const ExecutiveSummaryCard: React.FC<{ summary: string }> = ({ summary }) => {
+  if (!summary) return null;
+
+  // Split lines and normalize
+  const rawLines = summary.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  const formatInlineText = (str: string) => {
+    const parts: React.ReactNode[] = [];
+    const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    let lastIndex = 0;
+    let match;
+    let keyIdx = 0;
+
+    while ((match = regex.exec(str)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(str.substring(lastIndex, match.index));
+      }
+      const token = match[0];
+      if (token.startsWith('**') && token.endsWith('**')) {
+        const content = token.slice(2, -2);
+        if (content.includes('ACTIVELY WEAPONIZED')) {
+          parts.push(
+            <span
+              key={keyIdx++}
+              className="inline-flex items-center gap-1 mx-1 px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 font-bold font-mono text-[11px] animate-pulse"
+            >
+              ⚠️ {content}
+            </span>
+          );
+        } else if (content.includes('CONFIRMED')) {
+          parts.push(
+            <span
+              key={keyIdx++}
+              className="inline-flex items-center gap-1 mx-1 px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold font-mono text-[11px]"
+            >
+              ✅ {content}
+            </span>
+          );
+        } else if (content.includes('Investigation Target:')) {
+          parts.push(
+            <span key={keyIdx++} className="text-cyan-400 font-bold uppercase tracking-wider text-[11px] mr-1">
+              {content}
+            </span>
+          );
+        } else {
+          parts.push(
+            <strong key={keyIdx++} className="text-white font-semibold">
+              {content}
+            </strong>
+          );
+        }
+      } else if (token.startsWith('`') && token.endsWith('`')) {
+        parts.push(
+          <code
+            key={keyIdx++}
+            className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700/80 font-mono text-cyan-300 text-[11px] mx-1"
+          >
+            {token.slice(1, -1)}
+          </code>
+        );
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < str.length) {
+      parts.push(str.substring(lastIndex));
+    }
+    return parts;
+  };
+
+  // Find target line
+  const targetLine = rawLines.find((l) => l.includes('Investigation Target:'));
+  const contentLines = rawLines.filter((l) => l !== targetLine);
+
+  return (
+    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 space-y-3 shadow-xl">
+      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+        <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <FileText className="w-4 h-4 text-cyan-400" />
+          <span>Executive Intelligence Briefing</span>
+        </div>
+        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+          Synthesized Briefing
+        </span>
+      </div>
+
+      {/* Target Scope Banner */}
+      {targetLine && (
+        <div className="p-3 rounded-lg bg-cyan-950/30 border border-cyan-800/40 text-xs text-slate-200 flex items-start gap-2.5">
+          <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+          <div className="leading-relaxed flex-1">
+            {formatInlineText(targetLine)}
+          </div>
+        </div>
+      )}
+
+      {/* Structured Category Cards */}
+      <div className="space-y-2">
+        {contentLines.map((line, idx) => {
+          const isSubDetail =
+            line.startsWith('└') ||
+            line.startsWith('L ') ||
+            line.includes('Attribution:') ||
+            line.includes('Affected enterprise asset');
+
+          if (isSubDetail) {
+            return (
+              <div
+                key={idx}
+                className="ml-6 sm:ml-8 -mt-1 p-2 rounded-md bg-slate-900/90 border border-slate-800/70 text-[11px] text-slate-300 flex items-start gap-2 font-mono"
+              >
+                <span className="text-cyan-400 font-bold shrink-0">└</span>
+                <span className="leading-relaxed">{formatInlineText(line.replace(/^[•\s*└L\s*]+/, ''))}</span>
+              </div>
+            );
+          }
+
+          let cardStyle = 'border-slate-800 bg-slate-900/60 text-slate-200';
+          let icon = <FileText className="w-4 h-4 text-slate-400" />;
+
+          if (line.includes('Vulnerability Intelligence')) {
+            cardStyle = 'border-rose-905/40 bg-rose-950/20 text-slate-200 border-rose-800/40';
+            icon = <Shield className="w-4 h-4 text-rose-400 shrink-0" />;
+          } else if (line.includes('Threat Intelligence')) {
+            cardStyle = 'border-amber-900/40 bg-amber-950/20 text-slate-200 border-amber-800/40';
+            icon = <Activity className="w-4 h-4 text-amber-400 shrink-0" />;
+          } else if (line.includes('Asset Risk')) {
+            cardStyle = 'border-purple-900/40 bg-purple-950/20 text-slate-200 border-purple-800/40';
+            icon = <Cpu className="w-4 h-4 text-purple-400 shrink-0" />;
+          } else if (line.includes('NIST CSF 2.0 Compliance')) {
+            cardStyle = 'border-emerald-900/40 bg-emerald-950/20 text-slate-200 border-emerald-800/40';
+            icon = <Award className="w-4 h-4 text-emerald-400 shrink-0" />;
+          } else if (line.includes('Evidence Verification')) {
+            cardStyle = 'border-teal-900/40 bg-teal-950/20 text-slate-200 border-teal-800/40';
+            icon = <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />;
+          }
+
+          const cleanText = line.replace(/^[•\s*]+/, '');
+
+          return (
+            <div
+              key={idx}
+              className={`p-3 rounded-lg border flex items-start gap-3 text-xs leading-relaxed transition-all ${cardStyle}`}
+            >
+              <div className="mt-0.5 shrink-0">{icon}</div>
+              <div className="flex-1 leading-relaxed">
+                {formatInlineText(cleanText)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export const AgentSwarmView: React.FC = () => {
   // Mode selection: Swarm vs Classic Fallback Assistant
   const [viewMode, setViewMode] = useState<'swarm' | 'classic'>('swarm');
@@ -928,12 +1083,7 @@ export const AgentSwarmView: React.FC = () => {
                     </div>
 
                     {/* Executive Summary */}
-                    <div className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 text-sm text-slate-200 leading-relaxed">
-                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                        <FileText className="w-3.5 h-3.5 text-cyan-400" /> Executive Summary
-                      </div>
-                      <p>{activeReport.executive_summary}</p>
-                    </div>
+                    <ExecutiveSummaryCard summary={activeReport.executive_summary} />
 
                     {/* Confirmed Findings vs Hypotheses */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -945,12 +1095,36 @@ export const AgentSwarmView: React.FC = () => {
                         </div>
                         {activeReport.confirmed_findings && activeReport.confirmed_findings.length > 0 ? (
                           <ul className="space-y-1.5 text-xs text-slate-200">
-                            {activeReport.confirmed_findings.map((f, i) => (
-                              <li key={i} className="flex items-start gap-2">
-                                <span className="text-emerald-400 shrink-0 mt-0.5">•</span>
-                                <span>{f}</span>
-                              </li>
-                            ))}
+                            {activeReport.confirmed_findings.map((f: any, i: number) => {
+                              const claimText = typeof f === 'object' && f !== null ? (f.claim || JSON.stringify(f)) : String(f);
+                              const sourceType = typeof f === 'object' && f !== null ? f.source_type : null;
+                              const sourceId = typeof f === 'object' && f !== null ? f.source_id : null;
+                              const sourceUrl = typeof f === 'object' && f !== null ? f.source_url : null;
+                              return (
+                                <li key={i} className="flex items-start gap-2">
+                                  <span className="text-emerald-400 shrink-0 mt-0.5">•</span>
+                                  <div className="flex-1">
+                                    <span>{claimText}</span>
+                                    {(sourceType || sourceId) && (
+                                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-mono rounded bg-emerald-950 text-emerald-300 border border-emerald-800/60">
+                                        {sourceType && <span>{sourceType}</span>}
+                                        {sourceId && <span className="text-emerald-400 font-semibold">[{sourceId}]</span>}
+                                        {sourceUrl && (
+                                          <a
+                                            href={sourceUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-cyan-400 hover:text-cyan-300 underline inline-flex items-center ml-0.5"
+                                          >
+                                            <ExternalLink className="w-2.5 h-2.5" />
+                                          </a>
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                </li>
+                              );
+                            })}
                           </ul>
                         ) : (
                           <p className="text-xs text-slate-500 italic">No confirmed findings identified.</p>
@@ -965,12 +1139,23 @@ export const AgentSwarmView: React.FC = () => {
                         </div>
                         {activeReport.hypotheses && activeReport.hypotheses.length > 0 ? (
                           <ul className="space-y-1.5 text-xs text-slate-200">
-                            {activeReport.hypotheses.map((h, i) => (
-                              <li key={i} className="flex items-start gap-2">
-                                <span className="text-amber-400 shrink-0 mt-0.5">•</span>
-                                <span>{h}</span>
-                              </li>
-                            ))}
+                            {activeReport.hypotheses.map((h: any, i: number) => {
+                              const hypText = typeof h === 'object' && h !== null ? (h.hypothesis || JSON.stringify(h)) : String(h);
+                              const basisText = typeof h === 'object' && h !== null ? h.basis : null;
+                              return (
+                                <li key={i} className="flex items-start gap-2">
+                                  <span className="text-amber-400 shrink-0 mt-0.5">•</span>
+                                  <div className="flex-1">
+                                    <span>{hypText}</span>
+                                    {basisText && (
+                                      <p className="text-[11px] text-amber-300/80 font-mono mt-0.5">
+                                        Basis: {basisText}
+                                      </p>
+                                    )}
+                                  </div>
+                                </li>
+                              );
+                            })}
                           </ul>
                         ) : (
                           <p className="text-xs text-slate-500 italic">Zero unconfirmed hypotheses pending verification.</p>
@@ -1006,17 +1191,20 @@ export const AgentSwarmView: React.FC = () => {
                       </div>
                       {activeReport.recommendations && activeReport.recommendations.length > 0 ? (
                         <div className="space-y-2">
-                          {activeReport.recommendations.map((rec, i) => (
-                            <div
-                              key={i}
-                              className="flex items-start gap-3 p-2.5 rounded bg-slate-900/60 border border-slate-800 text-xs text-slate-200"
-                            >
-                              <span className="w-5 h-5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 flex items-center justify-center font-mono text-[10px] font-bold shrink-0">
-                                {i + 1}
-                              </span>
-                              <span>{rec}</span>
-                            </div>
-                          ))}
+                          {activeReport.recommendations.map((rec: any, i: number) => {
+                            const recText = typeof rec === 'object' && rec !== null ? (rec.action || rec.recommendation || JSON.stringify(rec)) : String(rec);
+                            return (
+                              <div
+                                key={i}
+                                className="flex items-start gap-3 p-2.5 rounded bg-slate-900/60 border border-slate-800 text-xs text-slate-200"
+                              >
+                                <span className="w-5 h-5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 flex items-center justify-center font-mono text-[10px] font-bold shrink-0">
+                                  {i + 1}
+                                </span>
+                                <span>{recText}</span>
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-xs text-slate-500 italic">No explicit remediations required.</p>
@@ -1465,12 +1653,15 @@ export const AgentSwarmView: React.FC = () => {
                     {activeReport.verification.contradictions_detected &&
                     activeReport.verification.contradictions_detected.length > 0 ? (
                       <ul className="space-y-1 text-xs text-rose-300">
-                        {activeReport.verification.contradictions_detected.map((c, i) => (
-                          <li key={i} className="flex items-start gap-1.5">
-                            <span className="text-rose-400 font-bold">•</span>
-                            <span>{c}</span>
-                          </li>
-                        ))}
+                        {activeReport.verification.contradictions_detected.map((c: any, i: number) => {
+                          const text = typeof c === 'object' && c !== null ? (c.contradiction || c.claim || c.details || JSON.stringify(c)) : String(c);
+                          return (
+                            <li key={i} className="flex items-start gap-1.5">
+                              <span className="text-rose-400 font-bold">•</span>
+                              <span>{text}</span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
                       <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
@@ -1489,12 +1680,19 @@ export const AgentSwarmView: React.FC = () => {
                     {activeReport.verification.missing_evidence &&
                     activeReport.verification.missing_evidence.length > 0 ? (
                       <ul className="space-y-1.5 text-xs text-amber-200">
-                        {activeReport.verification.missing_evidence.map((m, i) => (
-                          <li key={i} className="flex items-start gap-1.5">
-                            <span className="text-amber-400">•</span>
-                            <span>{m}</span>
-                          </li>
-                        ))}
+                        {activeReport.verification.missing_evidence.map((m: any, i: number) => {
+                          const itemTitle = typeof m === 'object' && m !== null ? (m.item || JSON.stringify(m)) : String(m);
+                          const reason = typeof m === 'object' && m !== null ? m.reason : null;
+                          return (
+                            <li key={i} className="flex items-start gap-1.5">
+                              <span className="text-amber-400">•</span>
+                              <div className="flex-1">
+                                <span className="font-semibold">{itemTitle}</span>
+                                {reason && <p className="text-[11px] text-amber-300/80 mt-0.5">{reason}</p>}
+                              </div>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
                       <div className="text-xs text-slate-400 italic">

@@ -19,6 +19,39 @@ DEFAULT_MODEL = "llama-3.3-70b-versatile"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
+def load_env_file(filepath: Optional[str] = None) -> None:
+    """Loads variables from .env file into os.environ if not already present."""
+    if not filepath:
+        if os.path.exists(".env"):
+            filepath = ".env"
+        else:
+            root_env = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                ".env"
+            )
+            if os.path.exists(root_env):
+                filepath = root_env
+    if not filepath or not os.path.exists(filepath):
+        return
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\"")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+    except Exception as e:
+        logger.debug(f"Could not load .env file: {e}")
+
+
+load_env_file()
+
+
 class GroqClientWrapper:
     """
     Robust Groq API client with zero external dependency requirement,

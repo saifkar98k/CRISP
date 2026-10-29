@@ -41,79 +41,132 @@ import {
 } from '../types/schemas';
 import defaultMappingConfig from '../data/default_csv_mapping.json';
 
+export type PipelineState = 'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR';
+
 export class PipelineManager {
-  private isInitialized = false;
+  private state: PipelineState = 'IDLE';
+  private initPromise: Promise<void> | null = null;
+  private lastError: Error | null = null;
+
+  getState(): PipelineState {
+    return this.state;
+  }
+
+  isReady(): boolean {
+    return this.state === 'READY';
+  }
+
+  getLastError(): Error | null {
+    return this.lastError;
+  }
+
+  resetForRetry(): void {
+    this.state = 'IDLE';
+    this.initPromise = null;
+    this.lastError = null;
+  }
 
   async initialize(onProgress?: (stage: string, percent: number) => void): Promise<void> {
-    if (this.isInitialized) {
-      if (onProgress) onProgress('Complete', 100);
+    if (this.state === 'READY') {
+      if (onProgress) onProgress('CRISP Platform Ready', 100);
       return;
     }
 
-    const t0 = performance.now();
+    if (this.initPromise) {
+      return this.initPromise;
+    }
 
-    // 1. Initialize SQLite Database tables
-    if (onProgress) onProgress('Initializing WebAssembly SQLite Database...', 15);
-    await crispDb.init();
+    this.state = 'INITIALIZING';
+    this.lastError = null;
 
-    // 2. Check if assets exist; seed if empty
-    if (onProgress) onProgress('Loading Enterprise Assets & Criticality Tiers...', 30);
-    const existingAssets = crispDb.getAssets();
-    if (existingAssets.length === 0) {
-      for (const a of INITIAL_ENTERPRISE_ASSETS) {
-        crispDb.upsertAsset(a);
+    this.initPromise = (async () => {
+      const t0 = performance.now();
+
+      try {
+        // 1. Initialize SQLite Database tables (Stage 15%)
+        if (onProgress) onProgress('Initializing WebAssembly SQLite Database...', 15);
+        await crispDb.init();
+
+        // 2. Check if assets exist; seed if empty (Stage 30%)
+        if (onProgress) onProgress('Loading Enterprise Assets & Criticality Tiers...', 30);
+        const existingAssets = crispDb.getAssets();
+        if (existingAssets.length === 0) {
+          for (const a of INITIAL_ENTERPRISE_ASSETS) {
+            crispDb.upsertAsset(a);
+          }
+        }
+
+        // 3. Check if NIST controls exist; seed if empty (Stage 45%)
+        if (onProgress) onProgress('Evaluating NIST CSF 2.0 Control Baselines...', 45);
+        const existingControls = crispDb.getNistControls();
+        if (existingControls.length === 0) {
+          crispDb.upsertNistControls(INITIAL_NIST_CONTROLS);
+        }
+
+        // 4. Load baseline CISA KEV (Stage 60%)
+        if (onProgress) onProgress('Hydrating CISA Known Exploited Vulnerabilities Catalog...', 60);
+        try {
+          await cisaKevProvider.loadCatalog(false);
+        } catch (cisaErr) {
+          console.warn('CISA KEV live fetch deferred, using embedded baseline:', cisaErr);
+        }
+
+        // 5. Check if vulnerabilities exist; if empty, run initial NVD + KEV pipeline (Stage 75%)
+        let vulns = crispDb.getVulnerabilities();
+        if (vulns.length === 0) {
+          if (onProgress) onProgress('Ingesting Vulnerability Intelligence...', 75);
+          try {
+            await this.syncVulnerabilityIntelligence({ forceRefresh: false });
+          } catch (syncErr) {
+            console.warn('Live NVD sync deferred, fallback verified:', syncErr);
+          }
+        }
+
+        // 6. Check if events exist; if empty, import default historical CSV (Stage 85%)
+        const events = crispDb.getSecurityEvents(10);
+        if (events.length === 0) {
+          if (onProgress) onProgress('Correlating Historical Incident Telemetry...', 85);
+          try {
+            await this.importHistoricalSecurityEvents();
+          } catch (eventErr) {
+            console.warn('Historical event ingestion fallback applied:', eventErr);
+          }
+        }
+
+        // 7. Seed initial synthetic demo events (Stage 90%)
+        const syntheticEvents = crispDb.getSecurityEvents(100).filter((e) => !e.isRealData);
+        if (syntheticEvents.length === 0) {
+          const assets = crispDb.getAssets();
+          const demoBatch = syntheticDemoProvider.generateBaselineDemoEvents(assets, 6);
+          crispDb.insertSecurityEvents(demoBatch);
+        }
+
+        // 8. Initial risk and compliance recalculation (Stage 95%)
+        if (onProgress) onProgress('Calculating Multi-Factor Cyber Risk Matrix...', 95);
+        await this.recalculateAllRisksAndCompliance();
+
+        this.state = 'READY';
+        if (onProgress) onProgress('CRISP Platform Ready', 100);
+
+        crispDb.logPipelineExecution({
+          id: `INIT-${Date.now()}`,
+          stage: 'SQLITE_LOAD',
+          timestamp: new Date().toISOString(),
+          status: 'SUCCESS',
+          recordsProcessed: crispDb.getTableCount('vulnerabilities') + crispDb.getTableCount('security_events'),
+          message: 'CRISP Database & Core Engine initialized successfully.',
+          durationMs: Math.round(performance.now() - t0),
+        });
+      } catch (err: any) {
+        this.state = 'ERROR';
+        this.lastError = err instanceof Error ? err : new Error(String(err));
+        throw err;
+      } finally {
+        this.initPromise = null;
       }
-    }
+    })();
 
-    // 3. Check if NIST controls exist; seed if empty
-    if (onProgress) onProgress('Evaluating NIST CSF 2.0 Control Baselines...', 45);
-    const existingControls = crispDb.getNistControls();
-    if (existingControls.length === 0) {
-      crispDb.upsertNistControls(INITIAL_NIST_CONTROLS);
-    }
-
-    // 4. Load baseline CISA KEV
-    if (onProgress) onProgress('Hydrating CISA Known Exploited Vulnerabilities Catalog...', 60);
-    await cisaKevProvider.loadCatalog(false);
-
-    // 5. Check if vulnerabilities exist; if empty, run initial NVD + KEV pipeline
-    let vulns = crispDb.getVulnerabilities();
-    if (vulns.length === 0) {
-      if (onProgress) onProgress('Ingesting Vulnerability Intelligence...', 75);
-      await this.syncVulnerabilityIntelligence({ forceRefresh: false });
-    }
-
-    // 6. Check if events exist; if empty, import default historical CSV
-    const events = crispDb.getSecurityEvents(10);
-    if (events.length === 0) {
-      if (onProgress) onProgress('Correlating Historical Incident Telemetry...', 85);
-      await this.importHistoricalSecurityEvents();
-    }
-
-    // 7. Seed initial synthetic demo events
-    const syntheticEvents = crispDb.getSecurityEvents(100).filter((e) => !e.isRealData);
-    if (syntheticEvents.length === 0) {
-      const assets = crispDb.getAssets();
-      const demoBatch = syntheticDemoProvider.generateBaselineDemoEvents(assets, 6);
-      crispDb.insertSecurityEvents(demoBatch);
-    }
-
-    // 8. Initial risk and compliance recalculation
-    if (onProgress) onProgress('Calculating Multi-Factor Cyber Risk Matrix...', 95);
-    await this.recalculateAllRisksAndCompliance();
-
-    this.isInitialized = true;
-    if (onProgress) onProgress('CRISP Platform Ready', 100);
-
-    crispDb.logPipelineExecution({
-      id: `INIT-${Date.now()}`,
-      stage: 'SQLITE_LOAD',
-      timestamp: new Date().toISOString(),
-      status: 'SUCCESS',
-      recordsProcessed: crispDb.getTableCount('vulnerabilities') + crispDb.getTableCount('security_events'),
-      message: 'CRISP Database & Core Engine initialized successfully.',
-      durationMs: Math.round(performance.now() - t0),
-    });
+    return this.initPromise;
   }
 
   /**

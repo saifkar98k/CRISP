@@ -44,6 +44,18 @@ def run_migrations(db_path: str = DEFAULT_DB_PATH) -> bool:
     from services.pipeline.event_queue import init_dlq_table
     init_dlq_table(db_path)
 
+    # 6. Temporal Risk History table
+    from services.risk_engine import init_risk_history_db
+    init_risk_history_db(db_path)
+
+    # 7. Security telemetry events table
+    from services.security_event_service import init_security_events_db
+    init_security_events_db(db_path)
+
+    # 8. Assets and Correlated Security Findings tables
+    from services.correlation_engine import init_correlation_db
+    init_correlation_db(db_path)
+
     # Verify table integrity
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()

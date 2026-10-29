@@ -52,6 +52,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        # Ensure backwards-compatible columns exist on existing databases
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(vulnerabilities)").fetchall()]
+        for col_name, col_type in [
+            ("exploit_available", "INTEGER DEFAULT 0"),
+            ("patch_available", "INTEGER DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'PUBLISHED'"),
+        ]:
+            if col_name not in cols:
+                cursor.execute(f"ALTER TABLE vulnerabilities ADD COLUMN {col_name} {col_type}")
+
         # Index for efficient lookups
         cursor.execute(
             """

@@ -127,12 +127,19 @@ export interface InvestigationReport {
   overall_risk_score: number;
   overall_risk_rating: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   executive_summary: string;
-  confirmed_findings: string[];
-  hypotheses: string[];
-  missing_evidence: string[];
-  contradictions_detected: string[];
+  confirmed_findings: Array<string | {
+    claim: string;
+    source_type?: string;
+    source_id?: string;
+    source_table?: string;
+    source_url?: string | null;
+    is_verified?: boolean;
+  }>;
+  hypotheses: Array<string | { hypothesis: string; basis?: string }>;
+  missing_evidence: Array<string | { item: string; reason?: string }>;
+  contradictions_detected: Array<string | { claim?: string; contradiction?: string; details?: string }>;
   nist_mappings: Record<string, string[]>;
-  recommendations: string[];
+  recommendations: Array<string | { action?: string; recommendation?: string }>;
   agent_results?: {
     threat_intel?: ThreatIntelData;
     vuln_intel?: VulnIntelData;

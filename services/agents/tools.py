@@ -418,9 +418,23 @@ def tool_get_asset_events(asset_ip: Optional[str], asset_id: Optional[str], limi
             cur = conn.cursor()
             conditions = []
             params = []
-            if asset_ip:
-                conditions.append("(destination_ip = ? OR source_ip = ?)")
-                params.extend([asset_ip, asset_ip])
+            asset_ips = [asset_ip] if asset_ip else []
+            if asset_id:
+                asset_obj = tool_get_asset(asset_id=asset_id)
+                if asset_obj:
+                    if asset_obj.get("ip_address") and asset_obj["ip_address"] not in asset_ips:
+                        asset_ips.append(asset_obj["ip_address"])
+                    sec = asset_obj.get("secondary_ips")
+                    if sec:
+                        for s in str(sec).split(","):
+                            s_clean = s.strip()
+                            if s_clean and s_clean not in asset_ips:
+                                asset_ips.append(s_clean)
+            if asset_ips:
+                ip_placeholders = " OR ".join(["(destination_ip = ? OR source_ip = ?)" for _ in asset_ips])
+                conditions.append(f"({ip_placeholders})")
+                for ip in asset_ips:
+                    params.extend([ip, ip])
             if asset_id:
                 conditions.append("asset_id = ?")
                 params.append(asset_id)

@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -18,10 +21,27 @@ const serverCache = {
 // Map of active investigation child processes for real-time cancellation
 const activeProcesses = new Map<string, any>();
 
+// Cross-platform Python executable detection (supports Windows 'python' and Linux/macOS 'python3')
+function resolvePythonBinary(): string {
+  if (process.env.PYTHON_BIN) return process.env.PYTHON_BIN;
+  try {
+    execSync('python3 --version', { stdio: 'ignore' });
+    return 'python3';
+  } catch {
+    try {
+      execSync('python --version', { stdio: 'ignore' });
+      return 'python';
+    } catch {
+      return 'python3';
+    }
+  }
+}
+const PYTHON_BIN = resolvePythonBinary();
+
 // Helper to execute Python Auth Service methods
 function callAuthService(func: string, args: Record<string, any> = {}): any {
   const payload = JSON.stringify(args);
-  const pyCmd = `python3 -c "import sys, json; from services.auth_service import auth_service; d = json.load(sys.stdin); fn = getattr(auth_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.auth_service import auth_service; d = json.load(sys.stdin); fn = getattr(auth_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
   const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
   const lines = stdout.trim().split('\n');
   return JSON.parse(lines[lines.length - 1]);
@@ -30,7 +50,7 @@ function callAuthService(func: string, args: Record<string, any> = {}): any {
 // Helper to execute Python Audit Service methods
 function callAuditService(func: string, args: Record<string, any> = {}): any {
   const payload = JSON.stringify(args);
-  const pyCmd = `python3 -c "import sys, json; from services.audit_service import audit_service; d = json.load(sys.stdin); fn = getattr(audit_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.audit_service import audit_service; d = json.load(sys.stdin); fn = getattr(audit_service, '${func}'); res = fn(**d); print(json.dumps(res))"`;
   const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
   const lines = stdout.trim().split('\n');
   return JSON.parse(lines[lines.length - 1]);
@@ -39,7 +59,7 @@ function callAuditService(func: string, args: Record<string, any> = {}): any {
 // Helper to execute Enterprise Ingestion Hub methods
 function callIntegrationHub(func: string, args: Record<string, any> = {}): any {
   const payload = JSON.stringify(args);
-  const pyCmd = `python3 -c "import sys, json; from services.providers.enterprise_adapters import integration_hub; d = json.load(sys.stdin); fn = getattr(integration_hub, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.providers.enterprise_adapters import integration_hub; d = json.load(sys.stdin); fn = getattr(integration_hub, '${func}'); res = fn(**d); print(json.dumps(res))"`;
   const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
   const lines = stdout.trim().split('\n');
   return JSON.parse(lines[lines.length - 1]);
@@ -48,7 +68,7 @@ function callIntegrationHub(func: string, args: Record<string, any> = {}): any {
 // Helper to execute Event Queue methods
 function callEventQueue(func: string, args: Record<string, any> = {}): any {
   const payload = JSON.stringify(args);
-  const pyCmd = `python3 -c "import sys, json; from services.pipeline.event_queue import event_queue; d = json.load(sys.stdin); fn = getattr(event_queue, '${func}'); res = fn(**d); print(json.dumps(res))"`;
+  const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.pipeline.event_queue import event_queue; d = json.load(sys.stdin); fn = getattr(event_queue, '${func}'); res = fn(**d); print(json.dumps(res))"`;
   const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
   const lines = stdout.trim().split('\n');
   return JSON.parse(lines[lines.length - 1]);
@@ -61,7 +81,6 @@ async function startServer() {
   // Security Headers Middleware
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     next();
@@ -590,7 +609,7 @@ async function startServer() {
   app.post('/api/nvd/sync', (req, res) => {
     const { resultsPerPage = 20, startIndex = 0, keyword, cve_id } = req.body || {};
     try {
-      const pyCmd = `python3 -c "import json; from services.nvd_sync_service import sync_nvd; print(json.dumps(sync_nvd(resultsPerPage=${parseInt(resultsPerPage, 10)}, startIndex=${parseInt(startIndex, 10)}${keyword ? `, keyword='${keyword.replace(/'/g, "\\'")}'` : ''}${cve_id ? `, cve_id='${cve_id.replace(/'/g, "\\'")}'` : ''})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.nvd_sync_service import sync_nvd; print(json.dumps(sync_nvd(resultsPerPage=${parseInt(resultsPerPage, 10)}, startIndex=${parseInt(startIndex, 10)}${keyword ? `, keyword='${keyword.replace(/'/g, "\\'")}'` : ''}${cve_id ? `, cve_id='${cve_id.replace(/'/g, "\\'")}'` : ''})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 25000 });
       
       // Parse last JSON line
@@ -614,7 +633,7 @@ async function startServer() {
   // NVD Status endpoint
   app.get('/api/nvd/status', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.nvd_sync_service import get_nvd_sync_status; print(json.dumps(get_nvd_sync_status()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.nvd_sync_service import get_nvd_sync_status; print(json.dumps(get_nvd_sync_status()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 5000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -634,7 +653,7 @@ async function startServer() {
   app.get('/api/nvd/stored', (req, res) => {
     const { limit = 50, offset = 0, severity = 'ALL' } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.nvd_sync_service import get_vulnerabilities; print(json.dumps(get_vulnerabilities(limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)}, severity='${String(severity)}')))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.nvd_sync_service import get_vulnerabilities; print(json.dumps(get_vulnerabilities(limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)}, severity='${String(severity)}')))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 8000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -649,7 +668,7 @@ async function startServer() {
   app.post('/api/cisa-kev/sync', (req, res) => {
     const { limit } = req.body || {};
     try {
-      const pyCmd = `python3 -c "import json; from services.cisa_kev_sync_service import sync_cisa_kev; print(json.dumps(sync_cisa_kev(${limit ? `limit=${parseInt(limit, 10)}` : ''})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.cisa_kev_sync_service import sync_cisa_kev; print(json.dumps(sync_cisa_kev(${limit ? `limit=${parseInt(limit, 10)}` : ''})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 30000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -672,7 +691,7 @@ async function startServer() {
   // CISA KEV Status endpoint
   app.get('/api/cisa-kev/status', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.cisa_kev_sync_service import get_cisa_kev_sync_status; print(json.dumps(get_cisa_kev_sync_status()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.cisa_kev_sync_service import get_cisa_kev_sync_status; print(json.dumps(get_cisa_kev_sync_status()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 5000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -693,7 +712,7 @@ async function startServer() {
   app.get('/api/cisa-kev/stored', (req, res) => {
     const { limit = 50, offset = 0, vendor, product, search } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.cisa_kev_sync_service import get_known_exploited_vulnerabilities; print(json.dumps(get_known_exploited_vulnerabilities(limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)}${vendor ? `, vendor='${String(vendor).replace(/'/g, "\\'")}'` : ''}${product ? `, product='${String(product).replace(/'/g, "\\'")}'` : ''}${search ? `, search='${String(search).replace(/'/g, "\\'")}'` : ''})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.cisa_kev_sync_service import get_known_exploited_vulnerabilities; print(json.dumps(get_known_exploited_vulnerabilities(limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)}${vendor ? `, vendor='${String(vendor).replace(/'/g, "\\'")}'` : ''}${product ? `, product='${String(product).replace(/'/g, "\\'")}'` : ''}${search ? `, search='${String(search).replace(/'/g, "\\'")}'` : ''})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 8000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -720,7 +739,7 @@ async function startServer() {
   // CIC-IDS2017 Dataset Info / Inspection metadata
   app.get('/api/datasets/cic-ids2017/info', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.providers.security_dataset_provider import SecurityDatasetProvider; print(json.dumps(SecurityDatasetProvider().get_dataset_info()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.providers.security_dataset_provider import SecurityDatasetProvider; print(json.dumps(SecurityDatasetProvider().get_dataset_info()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 8000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -739,7 +758,7 @@ async function startServer() {
   app.post('/api/datasets/cic-ids2017/import', (req, res) => {
     const { limit, chunk_size, dataset_path } = req.body || {};
     try {
-      const pyCmd = `python3 -c "import json; from services.security_event_service import import_dataset_into_db; print(json.dumps(import_dataset_into_db(${dataset_path ? `dataset_path='${dataset_path.replace(/'/g, "\\'")}', ` : ''}${limit ? `limit=${parseInt(limit, 10)}, ` : ''}${chunk_size ? `chunk_size=${parseInt(chunk_size, 10)}` : ''})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.security_event_service import import_dataset_into_db; print(json.dumps(import_dataset_into_db(${dataset_path ? `dataset_path='${dataset_path.replace(/'/g, "\\'")}', ` : ''}${limit ? `limit=${parseInt(limit, 10)}, ` : ''}${chunk_size ? `chunk_size=${parseInt(chunk_size, 10)}` : ''})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 35000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -763,7 +782,7 @@ async function startServer() {
   // Security Events Analytics Aggregations Endpoint
   app.get('/api/events/analytics', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.security_event_service import get_attacks_by_category, get_attacks_by_severity, get_top_source_ips, get_top_destination_ports, get_protocol_distribution, get_source_distribution, get_attacks_over_time; print(json.dumps({'by_category': get_attacks_by_category(), 'by_severity': get_attacks_by_severity(), 'top_source_ips': get_top_source_ips(limit=10), 'top_dest_ports': get_top_destination_ports(limit=10), 'protocols': get_protocol_distribution(), 'sources': get_source_distribution(), 'over_time': get_attacks_over_time(limit=15)}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.security_event_service import get_attacks_by_category, get_attacks_by_severity, get_top_source_ips, get_top_destination_ports, get_protocol_distribution, get_source_distribution, get_attacks_over_time; print(json.dumps({'by_category': get_attacks_by_category(), 'by_severity': get_attacks_by_severity(), 'top_source_ips': get_top_source_ips(limit=10), 'top_dest_ports': get_top_destination_ports(limit=10), 'protocols': get_protocol_distribution(), 'sources': get_source_distribution(), 'over_time': get_attacks_over_time(limit=15)}))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 10000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -786,7 +805,7 @@ async function startServer() {
   app.get('/api/events', (req, res) => {
     const { dataset_source, category, severity, protocol, limit = 100, offset = 0 } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.security_event_service import get_security_events_filtered; print(json.dumps(get_security_events_filtered(dataset_source=${dataset_source && dataset_source !== 'ALL' ? `'${String(dataset_source).replace(/'/g, "\\'")}'` : 'None'}, attack_category=${category && category !== 'ALL' ? `'${String(category).replace(/'/g, "\\'")}'` : 'None'}, severity=${severity && severity !== 'ALL' ? `'${String(severity).replace(/'/g, "\\'")}'` : 'None'}, protocol=${protocol && protocol !== 'ALL' ? `'${String(protocol).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.security_event_service import get_security_events_filtered; print(json.dumps(get_security_events_filtered(dataset_source=${dataset_source && dataset_source !== 'ALL' ? `'${String(dataset_source).replace(/'/g, "\\'")}'` : 'None'}, attack_category=${category && category !== 'ALL' ? `'${String(category).replace(/'/g, "\\'")}'` : 'None'}, severity=${severity && severity !== 'ALL' ? `'${String(severity).replace(/'/g, "\\'")}'` : 'None'}, protocol=${protocol && protocol !== 'ALL' ? `'${String(protocol).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)}, offset=${parseInt(String(offset), 10)})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 10000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -800,7 +819,7 @@ async function startServer() {
   // Correlation Engine Run Endpoint (Phase 2 Step 4)
   app.post('/api/correlation/run', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.correlation_engine import run_correlation; print(json.dumps(run_correlation()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.correlation_engine import run_correlation; print(json.dumps(run_correlation()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 25000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -826,7 +845,7 @@ async function startServer() {
   app.get('/api/correlation/findings', (req, res) => {
     const { risk_level, asset_id, cve_id, limit = 100 } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.correlation_engine import SecurityCorrelationEngine; print(json.dumps(SecurityCorrelationEngine().get_findings(risk_level=${risk_level && risk_level !== 'ALL' ? `'${String(risk_level).replace(/'/g, "\\'")}'` : 'None'}, asset_id=${asset_id && asset_id !== 'ALL' ? `'${String(asset_id).replace(/'/g, "\\'")}'` : 'None'}, cve_id=${cve_id && cve_id !== 'ALL' ? `'${String(cve_id).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.correlation_engine import SecurityCorrelationEngine; print(json.dumps(SecurityCorrelationEngine().get_findings(risk_level=${risk_level && risk_level !== 'ALL' ? `'${String(risk_level).replace(/'/g, "\\'")}'` : 'None'}, asset_id=${asset_id && asset_id !== 'ALL' ? `'${String(asset_id).replace(/'/g, "\\'")}'` : 'None'}, cve_id=${cve_id && cve_id !== 'ALL' ? `'${String(cve_id).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -840,7 +859,7 @@ async function startServer() {
   // Correlation Summary Analytics Endpoint
   app.get('/api/correlation/summary', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.correlation_engine import SecurityCorrelationEngine; engine = SecurityCorrelationEngine(); print(json.dumps({'top_risks': engine.get_top_correlated_risks(5), 'top_assets': engine.get_top_affected_assets(5), 'top_vulnerabilities': engine.get_top_vulnerabilities_with_events(5)}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.correlation_engine import SecurityCorrelationEngine; engine = SecurityCorrelationEngine(); print(json.dumps({'top_risks': engine.get_top_correlated_risks(5), 'top_assets': engine.get_top_affected_assets(5), 'top_vulnerabilities': engine.get_top_vulnerabilities_with_events(5)}))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -855,7 +874,7 @@ async function startServer() {
   app.get('/api/risk/history', (req, res) => {
     const { asset, finding, level, limit = 100 } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.risk_engine import get_risk_history; print(json.dumps(get_risk_history(asset=${asset && asset !== 'ALL' ? `'${String(asset).replace(/'/g, "\\'")}'` : 'None'}, finding=${finding && finding !== 'ALL' ? `'${String(finding).replace(/'/g, "\\'")}'` : 'None'}, level=${level && level !== 'ALL' ? `'${String(level).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.risk_engine import get_risk_history; print(json.dumps(get_risk_history(asset=${asset && asset !== 'ALL' ? `'${String(asset).replace(/'/g, "\\'")}'` : 'None'}, finding=${finding && finding !== 'ALL' ? `'${String(finding).replace(/'/g, "\\'")}'` : 'None'}, level=${level && level !== 'ALL' ? `'${String(level).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -870,7 +889,7 @@ async function startServer() {
   app.get('/api/risk/trend', (req, res) => {
     const { asset, limit = 50 } = req.query;
     try {
-      const pyCmd = `python3 -c "import json; from services.risk_engine import get_risk_over_time_trend; print(json.dumps(get_risk_over_time_trend(asset=${asset && asset !== 'ALL' ? `'${String(asset).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.risk_engine import get_risk_over_time_trend; print(json.dumps(get_risk_over_time_trend(asset=${asset && asset !== 'ALL' ? `'${String(asset).replace(/'/g, "\\'")}'` : 'None'}, limit=${parseInt(String(limit), 10)})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -885,7 +904,7 @@ async function startServer() {
   app.post('/api/risk/calculate', (req, res) => {
     try {
       const inputData = JSON.stringify(req.body || {});
-      const pyCmd = `python3 -c "import sys, json; from services.risk_engine import calculate_final_risk; data = json.load(sys.stdin); print(json.dumps(calculate_final_risk(**data)))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.risk_engine import calculate_final_risk; data = json.load(sys.stdin); print(json.dumps(calculate_final_risk(**data)))"`;
       const stdout = execSync(pyCmd, { input: inputData, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -906,7 +925,7 @@ async function startServer() {
 
   function runSimulationTick() {
     try {
-      const pyCmd = `python3 -c "import json; from services.event_simulator import get_simulator; print(json.dumps(get_simulator().generate_event()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.event_simulator import get_simulator; print(json.dumps(get_simulator().generate_event()))"`;
       execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
     } catch (e) {
       console.error('Simulation tick error:', e);
@@ -916,7 +935,7 @@ async function startServer() {
   // Live Monitoring Metrics Endpoint
   app.get('/api/simulator/live-stats', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.event_simulator import get_simulator; print(json.dumps(get_simulator().get_live_monitoring_stats()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.event_simulator import get_simulator; print(json.dumps(get_simulator().get_live_monitoring_stats()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -984,7 +1003,7 @@ async function startServer() {
     try {
       const { type } = req.body || {};
       const inputData = JSON.stringify({ type: type || null });
-      const pyCmd = `python3 -c "import sys, json; from services.event_simulator import get_simulator; data = json.load(sys.stdin); etype = data.get('type'); print(json.dumps(get_simulator().generate_event(etype)))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.event_simulator import get_simulator; data = json.load(sys.stdin); etype = data.get('type'); print(json.dumps(get_simulator().generate_event(etype)))"`;
       const stdout = execSync(pyCmd, { input: inputData, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1002,7 +1021,7 @@ async function startServer() {
   // Knowledge Base Stats
   app.get('/api/rag/stats', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.rag.indexer import get_index_stats; print(json.dumps(get_index_stats()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.rag.indexer import get_index_stats; print(json.dumps(get_index_stats()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1016,7 +1035,7 @@ async function startServer() {
   app.post('/api/rag/query', (req, res) => {
     try {
       const payload = JSON.stringify(req.body || {});
-      const pyCmd = `python3 -c "import sys, json; from services.rag.retriever import retrieve; d = json.load(sys.stdin); q = d.get('query', ''); c = d.get('collection'); n = int(d.get('n_results', 5)); f = d.get('filters') or d.get('where'); res = retrieve(q, filters=f, n_results=n, collection=c); print(json.dumps(res if isinstance(res, (list, dict)) else {'message': res, 'results': []}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.rag.retriever import retrieve; d = json.load(sys.stdin); q = d.get('query', ''); c = d.get('collection'); n = int(d.get('n_results', 5)); f = d.get('filters') or d.get('where'); res = retrieve(q, filters=f, n_results=n, collection=c); print(json.dumps(res if isinstance(res, (list, dict)) else {'message': res, 'results': []}))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 25000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1030,7 +1049,7 @@ async function startServer() {
   app.post('/api/rag/index', (req, res) => {
     try {
       const payload = JSON.stringify(req.body || {});
-      const pyCmd = `python3 -c "import sys, json; from services.rag.indexer import index_all, index_vulnerabilities, index_kev, index_nist, index_findings, index_assets, index_incidents; d = json.load(sys.stdin); domain = d.get('domain', 'all'); limit = d.get('limit'); res = index_vulnerabilities(limit=limit) if domain == 'vulnerabilities' else (index_kev(limit=limit) if domain == 'kev' else (index_nist() if domain == 'nist' else (index_findings(limit=limit) if domain == 'findings' else (index_assets() if domain == 'assets' else index_all(vuln_limit=limit, kev_limit=limit, incident_limit=limit))))); print(json.dumps(res))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.rag.indexer import index_all, index_vulnerabilities, index_kev, index_nist, index_findings, index_assets, index_incidents; d = json.load(sys.stdin); domain = d.get('domain', 'all'); limit = d.get('limit'); res = index_vulnerabilities(limit=limit) if domain == 'vulnerabilities' else (index_kev(limit=limit) if domain == 'kev' else (index_nist() if domain == 'nist' else (index_findings(limit=limit) if domain == 'findings' else (index_assets() if domain == 'assets' else index_all(vuln_limit=limit, kev_limit=limit, incident_limit=limit))))); print(json.dumps(res))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 60000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1047,7 +1066,7 @@ async function startServer() {
   // Swarm Status Endpoint
   app.get('/api/agents/status', (req, res) => {
     try {
-      const pyCmd = `python3 -c "import json; from services.agents import get_swarm_status; print(json.dumps(get_swarm_status()))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.agents import get_swarm_status; print(json.dumps(get_swarm_status()))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1081,7 +1100,7 @@ async function startServer() {
         });
       } catch (e) {}
 
-      const pyCmd = `python3 -c "import sys, json; from services.agents import run_investigation; d = json.load(sys.stdin); print(json.dumps(run_investigation(query=d.get('query', ''), target_cve=d.get('target_cve'), target_asset=d.get('target_asset'), user_role=d.get('user_role', 'SOC_ANALYST'))))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.agents import run_investigation; d = json.load(sys.stdin); print(json.dumps(run_investigation(query=d.get('query', ''), target_cve=d.get('target_cve'), target_asset=d.get('target_asset'), user_role=d.get('user_role', 'SOC_ANALYST'))))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 35000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1095,7 +1114,7 @@ async function startServer() {
   app.get('/api/agents/history', (req, res) => {
     try {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-      const pyCmd = `python3 -c "import json; from services.agents import get_investigation_history; print(json.dumps(get_investigation_history(limit=${limit})))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import json; from services.agents import get_investigation_history; print(json.dumps(get_investigation_history(limit=${limit})))"`;
       const stdout = execSync(pyCmd, { encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1127,7 +1146,7 @@ async function startServer() {
     });
 
     const processKey = client_id || `proc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const child = spawn('python3', ['-u', '-m', 'services.agents.stream_runner'], {
+    const child = spawn(PYTHON_BIN, ['-u', '-m', 'services.agents.stream_runner'], {
       cwd: __dirname,
       env: { ...process.env, PYTHONPATH: __dirname, PYTHONUNBUFFERED: '1' },
     });
@@ -1226,7 +1245,7 @@ async function startServer() {
   app.post('/api/agents/classic-assistant', (req, res) => {
     try {
       const payload = JSON.stringify(req.body || {});
-      const pyCmd = `python3 -c "import sys, json; from services.rag.retriever import retrieve; from services.agents.groq_client import get_groq_client; d = json.load(sys.stdin); q = d.get('query', ''); hits = retrieve(q, n_results=4); hits_list = hits if isinstance(hits, list) else hits.get('results', []); groq = get_groq_client(); context_str = '\\n'.join([f'- {h.get(\\\"document\\\", \\\"\\\")[:200]}' for h in hits_list[:4]]); system_prompt = 'You are the CRISP AI Security Assistant. Answer accurately using only factual context provided.'; prompt = f'Context:\\n{context_str}\\n\\nQuestion: {q}'; answer = groq.generate(system_prompt=system_prompt, user_prompt=prompt, temperature=0.1); print(json.dumps({'answer': answer, 'sources': hits_list, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.rag.retriever import retrieve; from services.agents.groq_client import get_groq_client; d = json.load(sys.stdin); q = d.get('query', ''); hits = retrieve(q, n_results=4); hits_list = hits if isinstance(hits, list) else hits.get('results', []); groq = get_groq_client(); context_str = '\\n'.join([f'- {h.get(\\\"document\\\", \\\"\\\")[:200]}' for h in hits_list[:4]]); system_prompt = 'You are the CRISP AI Security Assistant. Answer accurately using only factual context provided.'; prompt = f'Context:\\n{context_str}\\n\\nQuestion: {q}'; answer = groq.generate(system_prompt=system_prompt, user_prompt=prompt, temperature=0.1); print(json.dumps({'answer': answer, 'sources': hits_list, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 25000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1241,7 +1260,7 @@ async function startServer() {
     try {
       const investigationId = req.params.id;
       const payload = JSON.stringify({ id: investigationId });
-      const pyCmd = `python3 -c "import sys, json; from services.agents import get_investigation_by_id; d = json.load(sys.stdin); res = get_investigation_by_id(d.get('id', '')); print(json.dumps(res if res else {'error': 'Investigation not found'}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.agents import get_investigation_by_id; d = json.load(sys.stdin); res = get_investigation_by_id(d.get('id', '')); print(json.dumps(res if res else {'error': 'Investigation not found'}))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const lastLine = lines[lines.length - 1];
@@ -1265,7 +1284,7 @@ async function startServer() {
     try {
       const { status, priority, assetId, cveId, search } = req.query;
       const payload = JSON.stringify({ status, priority, assetId, cveId, search });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); print(json.dumps(remediation_engine.list_plans(status=d.get('status'), priority=d.get('priority'), asset_id=d.get('assetId'), cve_id=d.get('cveId'), search=d.get('search'))))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); print(json.dumps(remediation_engine.list_plans(status=d.get('status'), priority=d.get('priority'), asset_id=d.get('assetId'), cve_id=d.get('cveId'), search=d.get('search'))))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
@@ -1278,7 +1297,7 @@ async function startServer() {
   app.get('/api/remediations/:id', (req, res) => {
     try {
       const payload = JSON.stringify({ id: req.params.id });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('id')); print(json.dumps(p if p else {'error': 'Remediation plan not found'}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('id')); print(json.dumps(p if p else {'error': 'Remediation plan not found'}))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       const result = JSON.parse(lines[lines.length - 1]);
@@ -1297,7 +1316,7 @@ async function startServer() {
       const userEmail = req.headers['x-user-email'] || req.body?.user_email || 'saifkar98k@gmail.com';
 
       const payload = JSON.stringify({ finding_id, generate_all, user_role: userRole, user_email: userEmail });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.generate_plans_for_all_findings() if d.get('generate_all') or not d.get('finding_id') else remediation_engine.create_plan_from_finding(d['finding_id'], assigned_to=d.get('user_email'), creator_role=d.get('user_role')); print(json.dumps(res))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.generate_plans_for_all_findings() if d.get('generate_all') or not d.get('finding_id') else remediation_engine.create_plan_from_finding(d['finding_id'], assigned_to=d.get('user_email'), creator_role=d.get('user_role')); print(json.dumps(res))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 25000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
@@ -1319,7 +1338,7 @@ async function startServer() {
       }
 
       const payload = JSON.stringify({ remediation_id: remediationId, status, notes, user_role: userRole, user_id: userEmail });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.update_status(d['remediation_id'], d['status'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.update_status(d['remediation_id'], d['status'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
@@ -1341,7 +1360,7 @@ async function startServer() {
       }
 
       const payload = JSON.stringify({ remediation_id: remediationId, evidence, notes, user_role: userRole, user_id: userEmail });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.submit_verification(d['remediation_id'], d['evidence'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.submit_verification(d['remediation_id'], d['evidence'], user_role=d.get('user_role'), user_id=d.get('user_id'), notes=d.get('notes', '')); print(json.dumps(res))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 20000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
@@ -1363,7 +1382,7 @@ async function startServer() {
       }
 
       const payload = JSON.stringify({ remediation_id: remediationId, reason, user_role: userRole, user_id: userEmail });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.reopen_plan(d['remediation_id'], d['reason'], user_role=d.get('user_role'), user_id=d.get('user_id')); print(json.dumps(res))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; d = json.load(sys.stdin); res = remediation_engine.reopen_plan(d['remediation_id'], d['reason'], user_role=d.get('user_role'), user_id=d.get('user_id')); print(json.dumps(res))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 15000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
@@ -1378,7 +1397,7 @@ async function startServer() {
       const remediationId = req.params.id;
       const { question } = req.body || {};
       const payload = JSON.stringify({ remediation_id: remediationId, question });
-      const pyCmd = `python3 -c "import sys, json; from services.remediation_engine import remediation_engine; from services.agents.groq_client import get_groq_client; from services.rag.retriever import retrieve; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('remediation_id')); q = d.get('question') or ''; plan_ctx = json.dumps(p, indent=2) if p else 'Plan not found'; rag_hits = retrieve(f\\\"{p.get('cve_id', '')} remediation {p.get('asset_name', '')}\\\", n_results=3); rag_ctx = '\\n'.join([h.get('document', '')[:200] for h in rag_hits]) if isinstance(rag_hits, list) else ''; groq = get_groq_client(); sys_prompt = 'You are the CRISP AI Remediation Assistant. Analyze the remediation plan with strict factual accuracy. Explain why the remediation is recommended, distinguish verified facts from proposed actions, cite evidence and vendor source references, explain operational urgency and potential blast radius, identify missing information, and ask for clarification when asset or product version is ambiguous. NEVER invent fake commands or false versions.'; user_prompt = f'Plan Context:\\n{plan_ctx}\\n\\nRAG Knowledge:\\n{rag_ctx}\\n\\nAnalyst Query: {q or \\\"Generate a comprehensive technical remediation briefing, blast radius analysis, and verification plan.\\\"}'; answer = groq.generate(system_prompt=sys_prompt, user_prompt=user_prompt, temperature=0.1); print(json.dumps({'plan_id': d.get('remediation_id'), 'analysis': answer, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
+      const pyCmd = `${PYTHON_BIN} -c "import sys, json; from services.remediation_engine import remediation_engine; from services.agents.groq_client import get_groq_client; from services.rag.retriever import retrieve; d = json.load(sys.stdin); p = remediation_engine.get_plan(d.get('remediation_id')); q = d.get('question') or ''; plan_ctx = json.dumps(p, indent=2) if p else 'Plan not found'; rag_hits = retrieve(f\\\"{p.get('cve_id', '')} remediation {p.get('asset_name', '')}\\\", n_results=3); rag_ctx = '\\n'.join([h.get('document', '')[:200] for h in rag_hits]) if isinstance(rag_hits, list) else ''; groq = get_groq_client(); sys_prompt = 'You are the CRISP AI Remediation Assistant. Analyze the remediation plan with strict factual accuracy. Explain why the remediation is recommended, distinguish verified facts from proposed actions, cite evidence and vendor source references, explain operational urgency and potential blast radius, identify missing information, and ask for clarification when asset or product version is ambiguous. NEVER invent fake commands or false versions.'; user_prompt = f'Plan Context:\\n{plan_ctx}\\n\\nRAG Knowledge:\\n{rag_ctx}\\n\\nAnalyst Query: {q or \\\"Generate a comprehensive technical remediation briefing, blast radius analysis, and verification plan.\\\"}'; answer = groq.generate(system_prompt=sys_prompt, user_prompt=user_prompt, temperature=0.1); print(json.dumps({'plan_id': d.get('remediation_id'), 'analysis': answer, 'model': groq.model, 'is_configured': groq.is_configured()}))"`;
       const stdout = execSync(pyCmd, { input: payload, encoding: 'utf-8', timeout: 35000 });
       const lines = stdout.trim().split('\n');
       return res.json(JSON.parse(lines[lines.length - 1]));
